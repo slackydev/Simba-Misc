@@ -1,0 +1,443 @@
+program wc01;
+{$DEFINE SMART}
+{$I SRL/OSR.simba}
+{$I ../scripts/powercutter/drawing.simba}
+
+type
+  TSchedule = record
+    Timer: TMMLTimer;
+    Signal:Int32;
+  end;
+
+  TProggyData = record
+    startInfo:TSkillInfo;
+    currLvl:Int32;
+    logsCut,prevLogsCut:Int32;
+    prcToNextLvl: Int32;
+    gains,rem,currXP:Double;
+    status:String;
+  end;
+
+const
+  TREE_Colors:TIntegerArray = [5664882];
+  TREE_UPTEXT = ['Willow'];
+  TREE_OPTTEXT= ['Chop down'];
+  TREE_SIZE   = [20,150];
+  TREE_TOL    = 17;
+  TREE_SPLIT  = 7;
+
+  XP_PER_LOG = 67.5;
+
+  SRL_DEBUG  = False;
+
+var
+  proggyFont:TFont;
+  proggyData:TProggyData;
+
+  Sched:TSchedule;
+  startTime:UInt32 := GetSystemTime();
+
+  user:TPlayer;
+  ms:TRSMainScreen;
+
+
+procedure DeclarePlayers();
+begin
+  with players.New()^ do
+  begin
+    LoginName := '';
+    Password  := '';
+    IsActive  := True;
+    IsMember  := True;
+    World     := 74;
+  end;
+  Players.SetCurrent(0);
+end;
+
+
+//---| general |--------------------------------------------------------------\\
+//----------------------------------------------------------------------------\\
+function EdgeFromBox(const Box:TBox): TPointArray; override;
+begin
+  if (Box.x1 = Box.x2) and (Box.y1 = Box.y2) then
+    Result := [Point(Box.x1,Box.y1)]
+  else
+    Result := Inherited(Box);
+end;
+
+function FindColorTolEx(var TPA:TPointArray; color:Int32; Bound:TBox; Tol:Int32): Boolean;
+begin
+  Result := FindColorsTolerance(tpa, color, Bound.x1,Bound.y1, Bound.x2,Bound.y2, Tol);
+end;
+
+function FindColorsTolEx(var TPA:TPointArray; Colors:TIntegerArray; Bounds:TBox; Tol:Int32): Boolean;
+var
+  i:Int32;
+  TMP:TPointArray;
+begin
+  for i:=0 to High(Colors) do
+  begin
+    FindColorsTolerance(TMP, Colors[i], Bounds, Tol);
+    TPA := CombineTPA(TPA,TMP);
+  end;
+  Result := Length(TPA) <> 0;
+end;
+
+procedure GaussWait(mu,sigma:Single);
+begin
+  Wait(Round(Abs(srl.GaussRand(mu,sigma))));
+end;
+
+procedure HoverSkill(skill:Int32);
+begin
+  stats.MouseOver(skill);
+  GaussWait(3500,500);
+end;
+
+
+procedure MouseOffClient(direction: Byte);
+var
+  i,W,H: Int32;
+  pt: TPoint;
+begin
+  GetClientDimensions(W, H);
+  pt := Mouse.GetPosition();
+
+  if (pt.X < 0) or (pt.X > W) or (pt.Y < 0) or (pt.Y > H) then
+    Exit();
+  if (direction >= 4) then
+    direction := Random(0,3);
+
+  case direction of
+    0: Mouse.Move(Box(-300, -300, W, 0)); // top
+    1: Mouse.Move(Box(0, H, W, H+300));   // bottom
+    2: Mouse.Move(Box(0-300, 0, 0, H));   // left
+    3: Mouse.Move(Box(W, 0, W+300, H));   // right
+  end;
+end;
+
+function GetRuntime(): UInt32;
+begin
+  Result := GetSystemTime() - startTime;
+end;
+
+
+//---| proggy stuff |---------------------------------------------------------\\
+//----------------------------------------------------------------------------\\
+procedure ProggyHandler(Obj:TObject); native;
+var
+  l:Int32;
+  runtime:UInt32;
+  str:TStringArray;
+  statusText:TPointArray;
+begin
+  if Sched.Signal = 1 then Exit();
+  Sched.Signal = 1;
+  try
+    runtime := GetRuntime() div 1000;
+    SmartBuffer.DrawTransparentRect(Box(360,26,511,96), $111111, 0.2);
+
+    str := ['Run time:','Gained XP:','XP p/h:','Status:'];
+    SmartBuffer.DrawTextNL(str,[365,30], ProggyFont, $AAAAAA, 0, True);
+
+    str := [
+      Format('%.2d:%.2d:%.2d', [(runtime div 3600), (runtime div 60) mod 60, runtime mod 60]),
+      ToStr(ceil(proggyData.gains)),
+      ToStr(ceil(proggyData.gains / (runtime / 3600))),
+      proggyData.Status
+    ];
+    SmartBuffer.DrawTextNL(str,[505,30], ProggyFont, $FFFFFF, 1, True);
+
+    SmartBuffer.DrawTransparentRect(Box(360,123,511,170), $111111, 0.2);
+    SmartBuffer.DrawText('Woodcutting level',[367,128], ProggyFont, $FFFFFF, 0, True);
+    DrawPrecentBar(
+      [365,143], 140,20, proggyData.prcToNextLvl,
+      'lvl:'+ToString(proggyData.currLvl),
+      'lvl:'+ToString(proggyData.currLvl+1)
+    );
+
+    SmartBuffer.DrawTransparent(0,0, Smart.Image);
+  except
+    WriteLn('Error: Somthing went wrong');
+  end;
+
+  Sched.Signal = 0;
+end;
+
+
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+
+procedure TerminateBot();
+begin
+  logout.ClickLogout();
+  TerminateScript();
+end;
+
+
+(*
+  Performes some very simple antiban procs.
+*)
+procedure Antiban();
+var
+  a:Double;
+begin
+  case Random(7000) of
+    5:
+      begin
+        proggyData.status := 'Antiban';
+
+        HoverSkill(SKILL_WOODCUTTING);
+        if Random(0, 4) > 1 then
+          Inventory.Open();
+      end;
+    6..7:
+      begin
+        proggyData.status := 'Antiban';
+
+        if Random(5) = 0 then
+          minimap.SetCompassAngle(srl.GaussRangeExt(-180,180),10);
+      end;
+    8:begin
+        proggyData.status := 'Antiban';
+
+        Mouse.setSpeed(srl.GaussRangeInt(22,26));
+        Mouse.Move(Box(560,220,730,490));
+        GaussWait(450,100);
+        Mouse.Move(Box(50,50,400,260));
+        GaussWait(250,60);
+      end;
+    9:begin
+        proggyData.status := 'Antiban';
+
+        Gametabs.Open(tabFriends);
+        GaussWait(3000,500);
+        if Random(0, 9) = 9 then
+        begin
+          MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
+          GaussWait(20000,2500);
+        end;
+        if Random(0, 9) > 3 then
+        begin
+          proggyData.status := 'Antiban';
+
+          hoverSkill(SKILL_WOODCUTTING);
+          Inventory.Open();
+          GaussWait(2000,500);
+        end;
+      end;
+  end;
+end;
+
+
+function IsAnimating(): Boolean;
+var
+  Shift:TIntegerArray;
+
+  function GetPixelShift(T:Int32):Integer;
+  var
+    BMP1,BMP2:Integer;
+    PlayerB := Box(263-40, 172-40, 263+40, 172+40);
+  begin
+    BMP1 := BitmapFromClient(PlayerB);
+    Wait(T);
+    BMP2 := BitmapFromClient(PlayerB);  //Error: The bitmap[48] does not exist at line 235 ??????
+    Result := CalculatePixelShift(BMP1,BMP2,[0,0,PlayerB.Width()-1,PlayerB.Height()-1]);
+    FreeBitmaps([BMP1,BMP2]);
+  end;
+
+begin
+  for 0 to 4 do Shift += GetPixelShift(70);
+  Result := MaxA(Shift) > 250;
+end;
+
+
+procedure FreeInventory();
+begin
+  inventory.Open();
+  if inventory.IsFull() then
+  begin
+    proggyData.status := 'Dropping';
+    Wait(33);
+    Sched.Timer.Off();
+    Inventory.DropItems(inventory.ErrorPattern());
+    Sched.Timer.On();
+
+    proggyData.logsCut += 28 - proggyData.prevLogsCut;
+    proggyData.prevLogsCut := 0;
+  end;
+end;
+
+
+function FindTrees(): TBoxArray;
+var
+  i,size:Int32;
+  TPA:TPointArray;
+  ATPA:T2DPointArray;
+  B:TBox;
+begin
+  proggyData.status := 'Searching';
+
+  SetColorToleranceSpeed(2);
+  FindColorsTolEx(TPA,TREE_Colors,ms.FBounds,TREE_TOL);
+  SetColorToleranceSpeed(1);
+
+  ATPA := ClusterTPA(TPA, TREE_SPLIT);
+  SortATPAFromMidPoint(ATPA,Point(255,170));
+  for i:=0 to High(ATPA) do
+  begin
+    B := GetTPABounds(ATPA[i]);
+    size := Max(B.Width(), B.Height());
+    if not(InRange(size, TREE_SIZE[0], TREE_SIZE[1])) then
+      Continue;
+    Result += B;
+  end;
+end;
+
+
+procedure ProcessWhileWaiting();
+var
+  n,atNextLvl,atCurrLvl:Int32;
+begin
+  n := Length(inventory.GetUsedSlots());
+  proggyData.logsCut += n - proggyData.prevLogsCut;
+  proggyData.prevLogsCut := n;
+
+  proggyData.gains := proggyData.logsCut * XP_PER_LOG;
+  proggyData.currXP := proggyData.startInfo.XP + proggyData.gains;
+  proggyData.currLvl := srl.GetLevelAtXP(Ceil(proggyData.currXP));
+  atNextLvl := srl.GetXPAtLevel(proggyData.currLvl+1);
+  atCurrLvl := srl.GetXPAtLevel(proggyData.currLvl);
+  proggyData.rem   := atNextLvl - proggyData.currXP;
+
+  (*
+  ClearDebug();
+  WriteLn('Chopped Logs: ', proggyData.logsCut);
+  WriteLn('Gained XP   : ', proggyData.gains);
+  WriteLn('Total XP    : ', proggyData.currXP);
+  WriteLn('Level       : ', proggyData.currLvl);
+  WriteLn('Remainder   : ', proggyData.rem);
+  *)
+  if (proggyData.rem < XP_PER_LOG * 4) then
+  begin
+    Mouse.Move(chatbox.GetBounds());
+    chatbox.ClickContinue();
+  end else if (proggyData.currXP - atCurrLvl <= XP_PER_LOG) then
+    chatbox.ClickContinue();
+
+  proggyData.prcToNextLvl := 100 - Round((proggyData.rem / (atNextLvl - atCurrLvl)) * 100);
+
+  AntiBan();
+end;
+
+
+procedure ChopChop();
+var
+  i:Int32;
+  TBA,TMP:TBoxArray;
+  TPA:TPointArray;
+begin
+  TBA := FindTrees();
+
+  for i:=0 to High(TBA) do
+  begin
+    mouse.Move(TBA[i]);
+    if not ms.IsUpText(TREE_UPTEXT) then
+      Continue;
+
+    proggyData.status := 'Chopping';
+
+    if Random(70) = 0 then
+    begin
+      ChooseOption.Open();
+      ChooseOption.Select(TREE_OPTTEXT);
+    end else
+      Mouse.Click(mouse_Left);
+
+    GaussWait(600,100);
+    while IsAnimating() do
+    begin
+      ProcessWhileWaiting();
+    end;
+
+    Break;
+  end;
+end;
+
+
+//----------------------------------------------------------------------------\\
+//----------------------------------------------------------------------------\\
+procedure FreeDrawing();
+begin
+  Sched.Timer.Off();
+  Sched.Timer.Free();
+end;
+
+procedure InitDrawing();
+begin
+  SmartBuffer := Smart.Image.Copy(0,0,764,502);
+  SmartBuffer.SetList(client.GetMBitmaps());
+  Client.GetMBitmaps().AddBMP(SmartBuffer);
+
+  ProggyFont := NewFont('Tahoma', 7, [fsBold], fqCleartype);
+
+  DrawSectionHeader(Box(360,7,511,26), 134,15);
+  SmartBuffer.DrawText('Slacky''s Powercutter 0.1',[365,10], ProggyFont, $AAAAAA);
+
+  DrawSectionHeader(Box(360,104,511,123), 23,15);
+  DrawStatsIcon([366,107], $AAAAAA);
+
+  Sched.Timer.Init();
+  Sched.Timer.setInterval(35);  //no need for more.. 28FPS
+  Sched.Timer.setOnTimer(ProggyHandler);
+  Sched.Timer.On();
+
+  AddOnTerminate(@FreeDrawing);
+  AddOnTerminate(@ProggyFont.Free);
+end;
+
+
+(*
+  Loads any needed data which the bot requires
+*)
+procedure InitBot();
+begin
+  //setup srl
+  srl.DisableDebug := not(SRL_DEBUG);
+  srl.DisableLog := True;
+  MS := MainScreen;
+  Mouse.SetSpeed(24);
+  DeclarePlayers();
+
+  //setup smart
+  Smart.EnableDrawing := True;
+  Smart.Init();
+
+  //finishing touches
+  Players.GetCurrent().Login();
+  if not(srl.isLoggedIn()) then
+    RaiseException('Unable to login player');
+  //minimap.SetCompassAngle(270,20);
+
+  //porggy
+  SmartSetTransparentColor(Smart.Target, 0);
+  proggyData.startInfo := stats.GetSkillInfo(SKILL_WOODCUTTING);
+  proggyData.status := 'Initalizing';
+  GaussWait(900,100);
+  proggyData.prevLogsCut := Length(inventory.GetUsedSlots());
+
+  InitDrawing();
+end;
+
+
+
+begin
+  InitBot();
+
+  repeat
+    ChopChop();
+    FreeInventory();
+    AntiBan();
+  until False;
+end.
+

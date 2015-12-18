@@ -1,0 +1,647 @@
+program SuperSimpleGuildMiner;
+{$define SMART}
+{$I SRL/OSR.simba}
+{$I OSRWalker/Walker.simba}
+{$I OSR-MiniBank.pas}
+{$I ../scripts/guild miner/drawing.simba}
+
+var
+  walkFally, walkMine: TRSWalker;
+  SmartImage: TMufasaBitmap;
+  ms: TRSMainScreen := mainscreen;
+  PlayerBox:TBox = [223,132,303,212];
+  XP_PER_ITEM = 50;
+
+procedure DeclarePlayers();
+begin
+  with players.New()^ do
+  begin
+    LoginName := '';
+    Password  := '';
+    IsActive  := True;
+    IsMember  := False;
+    World     := 302;
+  end;
+  Players.SetCurrent(0);
+end;
+
+//----------------------------------------------------------------------------\\
+
+type
+  TSchedule = record
+    Timer: TMMLTimer;
+    Signal:Int32;
+  end;
+
+  TProggyData = record
+    startInfo: TSkillInfo;
+    currLvl: Int32;
+    count,prevCount: Int32;
+    prcToNextLvl: Int32;
+    gains,rem,currXP:Double;
+    status:String;
+  end;
+
+var
+  random_calls: UInt64 := 1000;
+  bankTrips: Int32;
+  minedOres: Int32;
+
+  proggyFont:TFont;
+  proggyData:TProggyData;
+
+  Sched:TSchedule;
+  startTime:UInt32 := GetSystemTime();
+
+
+//---| proggy stuff |---------------------------------------------------------\\
+//----------------------------------------------------------------------------\\
+function GetRuntime(): UInt32;
+begin
+  Result := GetSystemTime() - startTime;
+end;
+
+procedure ProggyHandler(Obj:TObject); native;
+var
+  l:Int32;
+  runtime:UInt32;
+  str:TStringArray;
+  statusText:TPointArray;
+begin
+  if Sched.Signal = 1 then Exit();
+  Sched.Signal := 1;
+  try
+    runtime := GetRuntime() div 1000;
+    
+    //box 1
+    SmartBuffer.DrawTransparentRect(Box(360,26,511,111), $111111, 0.2);
+    str := ['Run time:','Gained XP:','XP p/h:','Ores mined:','Status:'];
+    SmartBuffer.DrawTextNL(str,[365,30], ProggyFont, $AAAAAA, 0, True);
+
+    str := [
+      Format('%.2d:%.2d:%.2d', [(runtime div 3600), (runtime div 60) mod 60, runtime mod 60]),
+      ToStr(ceil(proggyData.gains)),
+      ToStr(ceil(proggyData.gains / (runtime / 3600))),
+      ToStr(proggyData.count),
+      proggyData.Status
+    ];
+    SmartBuffer.DrawTextNL(str,[505,30], ProggyFont, $FFFFFF, 1, True);
+
+    //box 2
+    SmartBuffer.DrawTransparentRect(Box(360,138,511,185), $111111, 0.2);
+    SmartBuffer.DrawText('Mining level',[367,143], ProggyFont, $FFFFFF, 0, True);
+    DrawPrecentBar(
+      [365,158], 140,20, proggyData.prcToNextLvl, //pos, w,h,percent
+      'lvl:'+ToString(proggyData.currLvl),        //left-text
+      'lvl:'+ToString(proggyData.currLvl+1)       //right-text
+    );
+
+    SmartBuffer.DrawTransparent(0,0, Smart.Image);
+  except
+    WriteLn('Error: Something went wrong');
+  end;
+
+  Sched.Signal := 0;
+end;
+
+
+//----------------------------------------------------------------------------\\
+
+procedure GaussWait(mu,sigma:Single);
+begin
+  Wait(Round(Abs(srl.GaussRand(mu,sigma))));
+end;
+
+function ColorHSL(hue:Double=0.2; sat: Double=0.2): TColorSettings;
+begin
+  Result := [2, [hue, sat]];
+end;
+
+function EdgeFromBox(const Box:TBox): TPointArray; override;
+begin
+  if (Box.x1 = Box.x2) and (Box.y1 = Box.y2) then
+    Result := [Point(Box.x1,Box.y1)]
+  else
+    Result := Inherited(Box);
+end;
+
+procedure HoverSkill(skill:Int32);
+begin
+  stats.MouseOver(skill);
+  GaussWait(4500,500);
+end;
+
+procedure MouseOffClient(direction: Byte);
+var
+  i,W,H: Int32;
+  pt: TPoint;
+begin
+  GetClientDimensions(W, H);
+  pt := Mouse.GetPosition();
+
+  if (pt.X < 0) or (pt.X > W) or (pt.Y < 0) or (pt.Y > H) then
+    Exit();
+  if (direction >= 4) then
+    direction := Random(0,3);
+
+  case direction of
+    0: Mouse.Move(Box(-300, -300, W, 0)); // top
+    1: Mouse.Move(Box(0, H, W, H+300));   // bottom
+    2: Mouse.Move(Box(0-300, 0, 0, H));   // left
+    3: Mouse.Move(Box(W, 0, W+300, H));   // right
+  end;
+end;
+
+
+function IsAnimating(B:TBox=PlayerBox; minShift:Int32=250; maxWait:Int32=900): Boolean;
+var
+  t,shift:UInt32;
+  function GetPixelShift(T:Int32; B:TBox):Integer;
+  var
+    BMP1,BMP2:Int32;
+  begin
+    BMP1 := BitmapFromClient(B);
+    Wait(T);
+    BMP2 := BitmapFromClient(B);
+    Result := CalculatePixelShift(BMP1,BMP2,[0,0,B.Width()-1,B.Height()-1]);
+    FreeBitmaps([BMP1,BMP2]);
+  end;
+
+begin
+  t := GetTimeRunning() + maxWait;
+  repeat
+    shift := GetPixelShift(70,B);
+    if (shift > minShift) then
+      Exit(True);
+  until GetTimeRunning() > t;
+end;
+
+
+
+function TRSWalker.BuildPath(TPA: TPointArray; step:Int32=25): TPointArray;
+var
+  i,j,l:Int32;
+  tmp:TPointArray;
+begin
+  for i:=1 to High(TPA) do
+  begin
+    tmp := TPAFromLine(TPA[i-1].x,TPA[i-1].y, TPA[i].x,TPA[i].y);
+    SetLength(Result, l + ceil(length(tmp) / step));
+    for j:=0 to High(tmp) with step do
+      Result[inc(l)-1] := tmp[j];
+  end;
+  Result := Result + TPA[high(tpa)];
+end;
+
+//----------------------------------------------------------------------------\\
+
+(*
+  Performes some very simple antiban procs.
+  Adapts to the number of calls per hour... which varies depending on pos, respawntime etc
+*)
+procedure AntiBan();
+var
+  a,rph:Double;
+begin
+  inc(random_calls);
+  rph := random_calls / (GetTimeRunning() / (1000*60*60));
+  case Random(round(rph) * 4) of
+    0..7:
+      begin //2.0 p/h
+        HoverSkill(SKILL_MINING);
+        if Random(0, 4) > 1 then
+          Inventory.Open();
+        WriteLn('>>> Check stats: ', (GetTimeRunning() / (1000*60*60)));
+      end;
+    8..12: //1.0 p/h
+      begin
+        Stats.Open();
+        GaussWait(5000,500);
+        Inventory.Open();
+        //if Random(5) = 0 then
+        //  minimap.SetCompassAngle(srl.GaussRangeExt(-180,180),10);
+      end;
+    13..15: //0.5 p/h
+      begin
+        WriteLn('>>> Doing stuffs');
+        if Random(2)=0 then Gametabs.Open(tabFriends);
+        GaussWait(3000,500);
+        if Random(0, 9) = 0 then
+        begin
+          if Random(2)=0 then MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
+          GaussWait(30000,2500);
+        end;
+        if Random(0, 9) > 3 then
+        begin
+          hoverSkill(SKILL_MINING);
+          if Random(2)=0 then Inventory.Open();
+          GaussWait(2000,500);
+        end;
+      end;
+    16..18: //1.0 p/h
+      begin
+        WriteLn('>>> Taking a mini-break');
+        if Random(2)=0 then MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
+        GaussWait(65000,10000);
+        if not(srl.isLoggedIn()) then
+          Players.GetCurrent()^.Login();
+        HoverSkill(SKILL_MINING);
+      end;
+    19: //0.25 p/h (every four hours)
+      begin
+        a := srl.GaussRangeExt(1000*60*30,1000*60*5);
+        WriteLn('>>> Taking a break for ', round(a/1000/60), ' minutes');
+        logout.Open();
+        GaussWait(700,100);
+        logout.ClickLogout();
+        GaussWait(700,100);
+        MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
+        Wait(Max(0,Round(a)));
+        if not(srl.isLoggedIn()) then
+          Players.GetCurrent()^.Login();
+      end;
+  end;
+end;
+
+
+//-----------------
+function InventoryFull(): Boolean;
+begin
+  if inventory.IsOpen then
+    Exit(inventory.IsFull());
+  Result := Pos('inventory is too full',
+    ocr.Recognize(Box(60,394,432,411), TCompareRules([0,5]), NPCFont)
+  ) > 0;
+end;
+
+
+procedure WaitMoving();
+var i:Int32;
+begin
+  for i:=0 to 20 do
+    if not IsAnimating([580,10,714,137],300) then
+      Break;
+end;
+
+
+function WalkPath(walker:TRSWalker; path:TPointArray): Boolean;
+var i:Int32;
+begin
+  for i:=0 to 2 do
+    if walker.WalkPath(path) then
+    begin
+      Result := True;
+      break;
+    end;
+  WaitMoving();
+end;
+
+
+function ClimbLadder(): Boolean;
+var
+  i:Int32;
+  TPA:TPointArray;
+  ATPA:T2DPointArray;
+begin
+  FindColorsTolerance(TPA,1916500,ms.getBounds(),20,ColorHSL(0.08,0.2));
+  ATPA := ClusterTPA(TPA,3);
+  SortATPAFromMidPoint(ATPA,PlayerBox.Middle());
+  for i:=0 to High(ATPA) do
+    if Length(ATPA[i]) > 40 then
+    begin
+      mouse.Move(GetTPABounds(ATPA[i]));
+      if ms.IsUpText(['Climb-up', 'Climb-down', 'Ladder']) then
+        if mouse.Click(ctRed) then
+        begin
+          Result := True;
+          Break;
+        end;
+    end;
+  if Result then
+  begin
+    Wait(Random(2000,2500));
+  end else
+    RaiseException('Unable to find the ladder');
+end;
+
+var
+  Mine2Bank: TPointArray := [Point(286, 265), Point(298, 274), Point(322, 272), Point(355, 262), Point(326, 257), Point(320, 230), Point(305, 220), Point(292, 199), Point(272, 188), Point(253, 188), Point(252, 198)];
+
+function MineToBank(): Boolean;
+var
+  t:UInt32;
+  latter,pos:TPoint;
+  path:TPointArray;
+  castle:TBox := GetTPABounds([[263,254], [263,277], [293,277], [293,253]]);
+begin
+  pos := walkMine.GetMyPos();
+  latter := Point(305, 543);
+  path := walkMine.BuildPath([pos,latter],10);
+  if not(WalkPath(walkMine, path)) then
+    RaiseException('Failed at walking from mine!');
+
+  ClimbLadder();
+  t := GetTimeRunning() + 15000;
+  repeat
+    Wait(10);
+  until PointInBox(walkFally.GetMyPos(), castle) or (GetTimeRunning() > t);
+  GaussWait(1150,90);
+
+  WalkPath(walkFally, Mine2Bank);
+  if Distance(walkFally.GetMyPos(), Point(250,204)) > 10 then
+  begin
+    wait(Random(110,170));
+    walkFally.WalkToPos(srl.GaussPoint(Point(250,204),3));
+    wait(Random(700,1000));
+  end;
+end;
+
+
+function BankToMine(): Boolean;
+var
+  t:UInt32;
+  latter,pos:TPoint;
+  path:TPointArray;
+  mine:TBox := GetTPABounds([[274,524], [275,559], [305,560], [307,524]]);
+begin
+  if not WalkPath(walkFally, Mine2Bank.Reversed()) then
+    RaiseException('Failed at walking from bank!');
+  ClimbLadder();
+
+  t := GetTimeRunning() + 15000;
+  repeat
+    Wait(10);
+  until PointInBox(walkMine.GetMyPos(), mine) or (GetTimeRunning() > t);
+  GaussWait(450,20);
+
+  pos := walkMine.GetMyPos();
+  path := [[330,558], [346,543], [349,561], [377,566], [389,540]];
+  case Random(0,9) of
+    0..2: walkMine.WalkPath(walkMine.BuildPath([pos,path[0]],10));
+    3..5: walkMine.WalkPath(walkMine.BuildPath([pos,path[1]],10));
+    6..7: walkMine.WalkPath(walkMine.BuildPath([pos,path[2]],10));
+    8:    walkMine.WalkPath(walkMine.BuildPath([pos,path[3]],10));
+    9:    walkMine.WalkPath(walkMine.BuildPath([pos,path[4]],10));
+  end;
+  WaitMoving();
+end;
+
+
+
+procedure ProcessWhileWaiting();
+var
+  n,atNextLvl,atCurrLvl:Int32;
+begin
+  n := inventory.Count();
+  proggyData.count += n - proggyData.prevCount;
+  proggyData.prevCount := n;
+
+  proggyData.gains := proggyData.count * XP_PER_ITEM;
+  proggyData.currXP := proggyData.startInfo.XP + proggyData.gains;
+  proggyData.currLvl := srl.GetLevelAtXP(Ceil(proggyData.currXP));
+  atNextLvl := srl.GetXPAtLevel(proggyData.currLvl+1);
+  atCurrLvl := srl.GetXPAtLevel(proggyData.currLvl);
+  proggyData.rem   := atNextLvl - proggyData.currXP;
+
+  if (proggyData.rem < XP_PER_ITEM * 4) then
+  begin
+    Mouse.Move(chatbox.GetBounds());
+    chatbox.ClickContinue();
+  end else if (proggyData.currXP - atCurrLvl <= XP_PER_ITEM) then
+    chatbox.ClickContinue();
+
+  proggyData.prcToNextLvl := 100 - Round((proggyData.rem / (atNextLvl - atCurrLvl)) * 100);
+
+  AntiBan();
+end;
+
+
+//
+function FindActiveOre(): TBoxArray;
+var
+  i,j:Int32;
+  TPA:TPointArray;
+  ATPA:T2DPointArray;
+  B: TBox;
+
+  FAKE_MIDDLE := Point(230,185);
+begin
+  FindColorsTolerance(TPA, 2636603, Box(4,4,515,337), 15, ColorHSL(0.2,0.2));
+  ATPA := ClusterTPA(TPA,6);
+  SortATPAFromMidPoint(ATPA,FAKE_MIDDLE);
+
+  SetLength(Result, Length(ATPA));
+  for i:=0 to High(ATPA) do
+    if InRange(Length(ATPA[i]),14*14,32*32) then
+    begin
+      Result[j] := GetTPABounds(ATPA[i]);
+      Inc(j);
+    end;
+  SetLength(Result, j);
+end;
+
+
+function GetNearestRock(P:TPoint=[260,170]): TBox;
+var TBA:TBoxArray;
+begin
+  TBA := FindActiveOre();
+  TBA.SortFromMidPoint(P);
+  if Length(TBA) > 0 then
+    Exit(TBA[0]);
+end;
+
+function RockContainsOre(B:TBox): boolean;
+var
+  TPA:TPointArray;
+  t:UInt32;
+begin
+  t := GetTimeRunning() + 500;
+  while GetTimeRunning() < t do
+    if FindColorsTolerance(TPA, 2636603, B, 26, ColorHSL(0.2,0.2)) then
+      Exit(True);
+end;
+
+
+procedure MineOre(maxDist:Int32);
+var
+  i,j:Int32;
+  TBA,TMP:TBoxArray;
+  TPA:TPointArray;
+  B:TBox;
+begin
+  proggyData.status := 'Mining';
+  TBA := FindActiveOre();
+  for i:=0 to High(TBA) do
+  begin
+    if (Distance(TBA[i].Middle(), PlayerBox.Middle()) > maxDist) or
+       not(MainScreen.FBounds.Contains(TBA[i])) then
+      Continue;
+
+    mouse.Move(TBA[i]);
+    if not ms.IsUpText(['Mine', 'Rocks']) then
+      Continue;
+
+    if Random(90) = 0 then
+    begin
+      ChooseOption.Open();
+      GaussWait(100,30);
+      ChooseOption.Select(['Mine Rocks']);
+    end else
+      Mouse.Click(mouse_Left);
+
+    GaussWait(600,70);
+    j := GetTimeRunning() + srl.GaussRangeInt(3500,5000);
+    while GetTimeRunning() < j do
+      if not IsAnimating([580,10,714,137],300,700) then Break;
+
+    if Random(100)=0 then
+    begin
+      MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
+      GaussWait(4500,500);
+    end;
+    //else if UpdateMiningPattern(TBA[i],B) and MainScreen.FBounds.Contains(B) then
+    //  Mouse.Move(B);
+
+    B := GetNearestRock();
+    while RockContainsOre(B) and IsAnimating() do
+    begin
+      ProcessWhileWaiting();
+      AntiBan();
+    end;
+    inc(minedOres);
+    Break;
+  end;
+end;
+
+
+procedure HandleInventory();
+begin
+  if InventoryFull() then
+  begin
+    proggyData.status := 'Walking to bank';
+    proggyData.prevCount := 0;
+    Inc(bankTrips);
+    minedOres := 0;
+    MineToBank();
+    proggyData.status := 'Banking';
+    if not(OpenBank(BANK_FALADOR_EAST)) then
+      if not(OpenBank(BANK_FALADOR_EAST)) then
+        RaiseException('Unable to open bank');
+    GaussWait(450,60);
+    DepositAll();
+    GaussWait(750,150);
+    if Random(10) = 0 then GaussWait(5141,911);
+    if Random(10) = 0 then CloseBank();
+    GaussWait(150,40);
+    proggyData.status := 'Walking to mine';
+    BankToMine();
+  end;
+end;
+
+
+//----------------------------------------------------------------------------\\
+//----------------------------------------------------------------------------\\
+procedure FreeDrawing();
+begin
+  Sched.Timer.Off();
+  Sched.Timer.Free();
+end;
+
+procedure InitDrawing();
+begin
+  SmartBuffer := Smart.Image.Copy(0,0,764,502);
+  SmartBuffer.SetList(client.GetMBitmaps());
+  Client.GetMBitmaps().AddBMP(SmartBuffer);
+
+  ProggyFont := NewFont('Tahoma', 7, [fsBold], fqCleartype);
+
+  DrawSectionHeader(Box(360,7,511,26), 134,15);                                   //section header
+  SmartBuffer.DrawText('Slacky''s GuildMiner 0.1',[365,10], ProggyFont, $AAAAAA); //section text
+
+  DrawSectionHeader(Box(360,119,511,138), 23,15);  //section header
+  DrawStatsIcon([366,122], $AAAAAA);               //section icon
+
+  Sched.Timer.Init();
+  Sched.Timer.setInterval(35);  //no need for more..
+  Sched.Timer.setOnTimer(ProggyHandler);
+  Sched.Timer.On();
+
+  AddOnTerminate(@FreeDrawing);
+  AddOnTerminate(@ProggyFont.Free);
+end;
+
+
+(*
+  Loads any needed data which the bot requires
+*)
+procedure InitBot();
+begin
+  //setup srl
+  srl.Debugging := False;
+  mouse.SetSpeed(25);
+  DeclarePlayers();
+
+  //setup smart
+  Smart.EnableDrawing := True;
+  Smart.Init();
+  SmartImage := Smart.Image;
+
+  //finishing touches
+  Players.GetCurrent()^.Login();
+  if not(srl.isLoggedIn()) then
+    RaiseException('Unable to login player');
+
+  walkFally.Init('includes\maps\fally_east.png', -1);
+  walkFally.anyAngle  := True;
+  walkFally.skipClose := 19;
+  AddOnTerminate(@walkFally.Free);
+
+  walkMine.Init('includes\maps\dwarf_mine.png', -1);
+  walkMine.anyAngle  := True;
+  walkMine.skipClose := 19;
+  AddOnTerminate(@walkMine.Free);
+
+  //porggy
+  SmartSetTransparentColor(Smart.Target, 0);
+  proggyData.startInfo := stats.GetSkillInfo(SKILL_MINING);
+  proggyData.status := 'Initalizing';
+  GaussWait(900,100);
+  proggyData.prevCount := Length(inventory.GetUsedSlots());
+
+  InitDrawing();
+
+  WriteLn('--| Bot is loaded |----------');
+end;
+
+procedure WriteLog();
+var
+  minutesRun: Double;
+  coalMined:Int32;
+begin
+  minutesRun := GetTimeRunning()/1000/60;
+  coalMined := (bankTrips * 28) + minedOres;
+  ClearDebug();
+  WriteLn('--| Guild Miner |-----------------');
+  WriteLn('Runtime:    ', Round(minutesRun),' min');
+  WriteLn('Ores mined: ', coalMined);
+  WriteLn('XP Total:   ', coalMined * XP_PER_ITEM);
+  WriteLn('XP P/H:     ', Round((coalMined * XP_PER_ITEM)/(minutesRun/60)));
+  WriteLn('Trips:      ', bankTrips);
+  WriteLn('Trips P/H:  ', Round(bankTrips/(minutesRun/60)));
+  WriteLn('----------------------------------');
+end;
+
+begin
+  InitBot();
+  WriteLn('---| Initialized |---');
+
+  repeat
+    if minimap.GetRunEnergy() > srl.GaussRangeInt(15,35) then
+      minimap.ToggleRun(True);
+    HandleInventory();
+    MineOre(180);
+    AntiBan();
+    WriteLog();
+  until False;
+end.
+

@@ -1,0 +1,187 @@
+{$loadlib ../scripts/powercutter/drawingTools.dll}
+type
+  TNdPoint = Array of Int32;
+
+var
+  SmartBuffer:TMufasaBitmap;
+  IOMgr:TIOManager := client.GetIOManager();
+  PercentBarFont: TFont;
+
+function MiniBitmap(FData:PRGB32; Width,Height:Int32; Loaded:Boolean=True): TMiniBitmap; overload;
+begin
+  Result.FData := FData;
+  Result.Loaded:= Loaded;
+  Result.Height:= Height;
+  Result.Width := Width;
+end;
+
+  
+function NewFont(name:String; size:Int32; fs:TFontStyles; fq:TFontQuality): TFont;
+begin
+  result.Init();
+  result.SetName(name);
+  result.SetSize(size);
+  result.setStyle(fs);
+  result.setQuality(fq);
+  result.setColor($FFFFFF);
+end;
+
+procedure TMufasaBitmap.DrawText(txt:String; pos:TNdPoint; font:TFont;
+          color:Int32; align:Int32=0; shadow:Boolean=False; shadowDir:Byte=0); overload;
+var
+  bit:TBitmap;
+  muf:TMufasaBitmap;
+  W,H:Int32;
+  pt:TNdPoint;
+begin
+  bit.Init();
+  bit.getCanvas().setFont(font);
+  bit.getCanvas().getBrush().setStyle(bsClear);
+
+  W := bit.getCanvas().TextWidth(txt);
+  H := bit.getCanvas().TextHeight(txt);
+  bit.setWidth(W+1);
+  bit.setHeight(H+1);
+
+  case align of
+    0: pt := pos;
+    1: pt := [pos[0]-W,pos[1]];
+  end;
+
+  muf := self.Copy(pt[0],pt[1],pt[0]+W,pt[1]+H);
+  muf.DrawToCanvas(0,0,bit.getCanvas());
+
+  if Shadow then
+  begin
+    bit.getCanvas().getFont().setColor(1);
+    case ShadowDir of
+      0:bit.getCanvas().TextOut(0,0,txt);
+      1:bit.getCanvas().TextOut(1,0,txt);
+      2:bit.getCanvas().TextOut(2,0,txt);
+      3:bit.getCanvas().TextOut(2,1,txt);
+      4:bit.getCanvas().TextOut(2,2,txt);
+      5:bit.getCanvas().TextOut(1,2,txt);
+      6:bit.getCanvas().TextOut(0,2,txt);
+      7:bit.getCanvas().TextOut(0,1,txt);
+    end;
+    bit.getCanvas().getFont().setColor(color);
+    bit.getCanvas().TextOut(1,1,txt);
+  end else
+  begin
+    bit.getCanvas().getFont().setColor(color);
+    bit.getCanvas().TextOut(0,0,txt);
+  end;
+  muf.LoadFromTBitmap(bit);
+  muf.DrawTransparent(pt[0],pt[1],self);
+
+  muf.Free();
+  bit.Free();
+end;
+
+
+procedure TMufasaBitmap.DrawTextNL(txt:TStringArray; pos:TNdPoint; font:TFont;
+          color:Int32; align:Int32=0; shadow:Boolean=False; shadowDir:Byte=0);
+var
+  i,hei:Int32;
+begin
+  hei := Round(1.8 * abs(font.getHeight()));
+  for i:=0 to High(txt) do
+  begin
+    Self.DrawText(txt[i],pos,font,color,align,shadow,shadowDir);
+    inc(pos[1],hei);
+  end;
+end;
+
+//can crash (reason: Unknown)
+procedure TMufasaBitmap.DrawTransparentRect(box:TBox; color:UInt32; alpha:Single);
+var
+  Target:TMufasaBitmap;
+  FG,BG:TMiniBitmap;
+begin
+  Target.Init();
+  Target.CopyClientToBitmap(IOMgr, True, 0,0,764,502);
+
+  BG := MiniBitmap(Target.GetData(), 765,503);
+  FG := MiniBitmap(SmartBuffer.GetData(), 765,503);
+
+  SmartBuffer.Rectangle(box,color);
+  AlphaBlend(FG, BG, box, round(alpha*255));
+
+  Target.Free();
+end;
+
+
+procedure TMufasaBitmap.DrawTransparentBox(box:TBox; edgeSize:Int32=1; color:UInt32; alpha:Single);
+var
+  Target:TMufasaBitmap;
+  FG,BG:TMiniBitmap;
+  B:TBox;
+begin
+  Target.Init();
+  Target.CopyClientToBitmap(IOMgr, True, 0,0,764,502);
+
+  BG := MiniBitmap(Target.GetData(), 765,503);
+  FG := MiniBitmap(SmartBuffer.GetData(), 765,503);
+
+  B:=Box;
+  for 0 to edgeSize-1 do
+  begin
+    SmartBuffer.DrawBox(B,False,color);
+    B.Expand(-1);
+  end;
+  AlphaBlend(FG, BG, box, round(alpha*255));
+
+  Target.Free();
+end;
+
+
+
+/// tools
+procedure DrawSectionHeader(b:TBox; sectionWidth, sectionHeight:Int32);
+var
+  sw:Int32 := sectionWidth;
+  sh:Int32 := sectionHeight;
+begin
+  SmartBuffer.DrawBox(Box(b.x1,b.y1,b.x1+sw,b.y2),False,1973791);
+  SmartBuffer.Rectangle(Box(b.x1,b.y1+sh,b.x2,b.y2), 2631720);
+  SmartBuffer.DrawBox(Box(b.x1,b.y1+sh,b.x2,b.y2),False, 1973791);
+
+  SmartBuffer.Rectangle(Box(b.x1+1,b.y1+1,b.x1+sw-1,b.y2-1), 2631720);
+end;
+
+
+procedure DrawStatsIcon(p:TPoint; color:Int32);
+var s,m,l:TBox;
+begin
+  s := [p.x+00, p.y+06, p.x+02, p.y+10];
+  m := [p.x+04, p.y+03, p.x+06, p.y+10];
+  l := [p.x+08, p.y+00, p.x+10, p.y+10];
+  SmartBuffer.Rectangle(s, color);
+  SmartBuffer.Rectangle(m, color);
+  SmartBuffer.Rectangle(l, color);
+end;
+
+
+procedure DrawPrecentBar(pt:TPoint; w,h,percent:Int32; lText:String=''; rText:String='');
+var
+  B:TBox;
+  tx,ty:Int32;
+begin
+  B := [pt.x,pt.y,pt.x+w-1,pt.y+h-1];
+  SmartBuffer.DrawTPA(TPAFromBox(B), 986895);
+  B.Expand(-2);
+  B.x2 := B.x1 + round(B.Width() * (percent*0.01));
+  SmartBuffer.DrawTPA(TPAFromBox(B),1474364);
+
+  tx := B.x1 + (W div 2) - 8;
+  ty := B.y1 + (H div 2) - Abs(PercentBarFont.getHeight()) + 1;
+  SmartBuffer.DrawText(ToStr(percent)+'%',[tx,ty],PercentBarFont,$FFFFFF);
+  SmartBuffer.DrawText(lText,[b.x1+4,ty],PercentBarFont,$FFFFFF);
+  SmartBuffer.DrawText(rText,[pt.x+w-5,ty],PercentBarFont,$FFFFFF,1);
+end;
+
+
+begin
+  PercentBarFont := NewFont('Arial', 7, [fsBold], fqCleartype);
+  AddOnTerminate(@PercentBarFont.Free);
+end;
