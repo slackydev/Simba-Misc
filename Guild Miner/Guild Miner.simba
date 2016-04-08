@@ -2,15 +2,11 @@ program SuperSimpleGuildMiner;
 {$define SMART}
 {$I SRL/OSR.simba}
 {$I OSRWalker/Walker.simba}
-{$I OSR-MiniBank.pas}
 {$I ../scripts/guild miner/drawing.simba}
 
-var
-  walkFally, walkMine: TRSWalker;
-  SmartImage: TMufasaBitmap;
-  ms: TRSMainScreen := mainscreen;
-  PlayerBox:TBox = [223,132,303,212];
-  XP_PER_ITEM = 50;
+(*
+ Start anywhere down in the guild.
+*)
 
 procedure DeclarePlayers();
 begin
@@ -19,11 +15,18 @@ begin
     LoginName := '';
     Password  := '';
     IsActive  := True;
-    IsMember  := False;
-    World     := 302;
+    IsMember  := True;
+    World     := 396;
   end;
   Players.SetCurrent(0);
 end;
+
+var
+  walkFally, walkMine: TRSWalker;
+  SmartImage: TMufasaBitmap;
+  ms: TRSMainScreen := mainscreen;
+  PlayerBox:TBox = [223,132,303,212];
+  XP_PER_ITEM = 50;
 
 //----------------------------------------------------------------------------\\
 
@@ -249,7 +252,7 @@ begin
       end;
     19: //0.25 p/h (every four hours)
       begin
-        a := srl.GaussRangeExt(1000*60*30,1000*60*5);
+        a := srl.NormalRange(1000*60*30.0,1000*60*5);
         WriteLn('>>> Taking a break for ', round(a/1000/60), ' minutes');
         logout.Open();
         GaussWait(700,100);
@@ -267,8 +270,8 @@ end;
 //-----------------
 function InventoryFull(): Boolean;
 begin
-  if inventory.IsOpen then
-    Exit(inventory.IsFull());
+  if Inventory.IsOpen then
+    Exit(Inventory.IsFull());
   Result := Pos('inventory is too full',
     ocr.Recognize(Box(60,394,432,411), TCompareRules([0,5]), NPCFont)
   ) > 0;
@@ -317,10 +320,10 @@ begin
           Break;
         end;
     end;
+
   if Result then
-  begin
-    Wait(Random(2000,2500));
-  end else
+    Wait(Random(2000,2500))
+  else
     RaiseException('Unable to find the ladder');
 end;
 
@@ -340,7 +343,7 @@ begin
   if not(WalkPath(walkMine, path)) then
     RaiseException('Failed at walking from mine!');
 
-  ClimbLadder();
+  ClimbLadder({climb_up});
   t := GetTimeRunning() + 15000;
   repeat
     Wait(10);
@@ -351,7 +354,7 @@ begin
   if Distance(walkFally.GetMyPos(), Point(250,204)) > 10 then
   begin
     wait(Random(110,170));
-    walkFally.WalkToPos(srl.GaussPoint(Point(250,204),3));
+    walkFally.WalkToPos(srl.RandomPoint(Point(250,204),3));
     wait(Random(700,1000));
   end;
 end;
@@ -366,7 +369,7 @@ var
 begin
   if not WalkPath(walkFally, Mine2Bank.Reversed()) then
     RaiseException('Failed at walking from bank!');
-  ClimbLadder();
+  ClimbLadder({climb_down});
 
   t := GetTimeRunning() + 15000;
   repeat
@@ -401,7 +404,7 @@ begin
   proggyData.currLvl := srl.GetLevelAtXP(Ceil(proggyData.currXP));
   atNextLvl := srl.GetXPAtLevel(proggyData.currLvl+1);
   atCurrLvl := srl.GetXPAtLevel(proggyData.currLvl);
-  proggyData.rem   := atNextLvl - proggyData.currXP;
+  proggyData.rem := atNextLvl - proggyData.currXP;
 
   if (proggyData.rem < XP_PER_ITEM * 4) then
   begin
@@ -424,11 +427,11 @@ var
   ATPA:T2DPointArray;
   B: TBox;
 
-  FAKE_MIDDLE := Point(230,185);
+  MIDDLE_ISH := Point(230,185);
 begin
-  FindColorsTolerance(TPA, 2636603, Box(4,4,515,337), 15, ColorHSL(0.2,0.2));
+  FindColorsTolerance(TPA, 2702653, Box(4,4,515,337), 15, ColorHSL(0.2,0.2));
   ATPA := ClusterTPA(TPA,6);
-  SortATPAFromMidPoint(ATPA,FAKE_MIDDLE);
+  SortATPAFromMidPoint(ATPA, MIDDLE_ISH);
 
   SetLength(Result, Length(ATPA));
   for i:=0 to High(ATPA) do
@@ -457,7 +460,7 @@ var
 begin
   t := GetTimeRunning() + 500;
   while GetTimeRunning() < t do
-    if FindColorsTolerance(TPA, 2636603, B, 26, ColorHSL(0.2,0.2)) then
+    if FindColorsTolerance(TPA, 2702653, B, 26, ColorHSL(0.2,0.2)) then
       Exit(True);
 end;
 
@@ -490,7 +493,7 @@ begin
       Mouse.Click(mouse_Left);
 
     GaussWait(600,70);
-    j := GetTimeRunning() + srl.GaussRangeInt(3500,5000);
+    j := GetTimeRunning() + srl.NormalRange(3500,5000);
     while GetTimeRunning() < j do
       if not IsAnimating([580,10,714,137],300,700) then Break;
 
@@ -524,14 +527,19 @@ begin
     minedOres := 0;
     MineToBank();
     proggyData.status := 'Banking';
-    if not(OpenBank(BANK_FALADOR_EAST)) then
-      if not(OpenBank(BANK_FALADOR_EAST)) then
+
+    if not(BankScreen.Open(btNPCGray)) then
+    begin
+      GaussWait(550,90);
+      if not(BankScreen.Open(btNPCGray)) then
         RaiseException('Unable to open bank');
+    end;
+
     GaussWait(450,60);
-    DepositAll();
+    BankScreen.DepositAll();
     GaussWait(750,150);
     if Random(10) = 0 then GaussWait(5141,911);
-    if Random(10) = 0 then CloseBank();
+    if Random(10) = 0 then BankScreen.Close();
     GaussWait(150,40);
     proggyData.status := 'Walking to mine';
     BankToMine();
@@ -578,7 +586,7 @@ procedure InitBot();
 begin
   //setup srl
   srl.Debugging := False;
-  mouse.SetSpeed(25);
+  mouse.SetSpeed(35);
   DeclarePlayers();
 
   //setup smart
@@ -586,19 +594,20 @@ begin
   Smart.Init();
   SmartImage := Smart.Image;
 
-  //finishing touches
+  //login player
   Players.GetCurrent()^.Login();
   if not(srl.isLoggedIn()) then
     RaiseException('Unable to login player');
 
-  walkFally.Init('includes\maps\fally_east.png', -1);
+  //setup walkers
+  walkFally.Init('Includes\maps\fally_east.png', -1);
   walkFally.anyAngle  := True;
-  walkFally.skipClose := 19;
+  walkFally.skipClose := 20;
   AddOnTerminate(@walkFally.Free);
 
-  walkMine.Init('includes\maps\dwarf_mine.png', -1);
+  walkMine.Init('Includes\maps\dwarf_mine.png', -1);
   walkMine.anyAngle  := True;
-  walkMine.skipClose := 19;
+  walkMine.skipClose := 20;
   AddOnTerminate(@walkMine.Free);
 
   //porggy
@@ -636,7 +645,7 @@ begin
   WriteLn('---| Initialized |---');
 
   repeat
-    if minimap.GetRunEnergy() > srl.GaussRangeInt(15,35) then
+    if minimap.GetRunEnergy() > srl.NormalRange(15,35) then
       minimap.ToggleRun(True);
     HandleInventory();
     MineOre(180);

@@ -18,17 +18,19 @@ type
     status:String;
   end;
 
+
 const
-  TREE_Colors:TIntegerArray = [5664882];
+  TREE_COLORS:TIntegerArray = [5664882];
   TREE_UPTEXT = ['Willow'];
   TREE_OPTTEXT= ['Chop down'];
   TREE_SIZE   = [20,150];
   TREE_TOL    = 17;
   TREE_SPLIT  = 7;
 
+const
   XP_PER_LOG = 67.5;
-
   SRL_DEBUG  = False;
+
 
 var
   proggyFont:TFont;
@@ -176,40 +178,33 @@ end;
 
 
 (*
-  Performes some very simple antiban procs.
+  Performs some very simple antiban procs.
 *)
 procedure Antiban();
 var
   a:Double;
 begin
+  proggyData.status := 'Antiban';
   case Random(7000) of
     5:
       begin
-        proggyData.status := 'Antiban';
-
         HoverSkill(SKILL_WOODCUTTING);
         if Random(0, 4) > 1 then
           Inventory.Open();
       end;
     6..7:
       begin
-        proggyData.status := 'Antiban';
-
         if Random(5) = 0 then
-          minimap.SetCompassAngle(srl.GaussRangeExt(-180,180),10);
+          minimap.SetCompassAngle(srl.NormalRange(-180.0,180),10);
       end;
     8:begin
-        proggyData.status := 'Antiban';
-
-        Mouse.setSpeed(srl.GaussRangeInt(22,26));
+        Mouse.setSpeed(srl.NormalRange(22,26));
         Mouse.Move(Box(560,220,730,490));
         GaussWait(450,100);
         Mouse.Move(Box(50,50,400,260));
         GaussWait(250,60);
       end;
     9:begin
-        proggyData.status := 'Antiban';
-
         Gametabs.Open(tabFriends);
         GaussWait(3000,500);
         if Random(0, 9) = 9 then
@@ -219,8 +214,6 @@ begin
         end;
         if Random(0, 9) > 3 then
         begin
-          proggyData.status := 'Antiban';
-
           hoverSkill(SKILL_WOODCUTTING);
           Inventory.Open();
           GaussWait(2000,500);
@@ -403,8 +396,7 @@ end;
 procedure InitBot();
 begin
   //setup srl
-  srl.DisableDebug := not(SRL_DEBUG);
-  srl.DisableLog := True;
+  srl.Debugging := SRL_DEBUG;
   MS := MainScreen;
   Mouse.SetSpeed(24);
   DeclarePlayers();
@@ -414,7 +406,7 @@ begin
   Smart.Init();
 
   //finishing touches
-  Players.GetCurrent().Login();
+  Players.GetCurrent()^.Login();
   if not(srl.isLoggedIn()) then
     RaiseException('Unable to login player');
   //minimap.SetCompassAngle(270,20);

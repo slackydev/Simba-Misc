@@ -1,0 +1,1 @@
+Place this folder inside your "Scripts" folder.
