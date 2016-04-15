@@ -1,0 +1,102 @@
+program SuperSimple_Superheater;
+{$DEFINE SMART}
+{$I SRL/OSR.simba}
+(*
+  SuperSimple Superheater™
+  Copyright © 2016 by Jarl `slacky` Holta 
+
+  Steps to use:
+   1. Login your player.
+   2. place nature runes in your inventory.
+   3. Setup the lines right bellow here. 
+   4. Press Run
+*)
+
+type 
+  TOreInfo = record 
+    Uptext: String; 
+    Slot: Int32; Count: Int32; 
+  end;
+
+var
+  //Setup this         | ore name | bankslot | count to withdraw | 
+  MAIN_ORE: TOreInfo = ['Mithril ore', 0, 5];
+  FUEL_ORE: TOreInfo = ['Coal', 1, WITHDRAW_ALL];
+  BankerType := btNPCBlue; //btNPCGray or btNPCBlue
+
+var
+  NatureRune := DTMFromString('mrAAAAHic42BgYHBkYmBwA2IbIHZhgvAtgNgXyn8GVHMfiB8C8Ssgfg3Ez4H4BRB/AmLBblEMXJ6fx7By3lygLCMDF5DEhRmJwDAAAB0PEGM=');
+
+  
+procedure GaussWait(mu,sigma:Single);
+begin
+  Wait(Round(Abs(srl.GaussRand(mu,sigma))));
+end;
+
+function Superheat(): Boolean;
+var
+  i:Int32;
+  B:TBox;
+begin
+  Spells.Open()
+  for i:=1 to MAIN_ORE.Count do
+  begin
+    if not Spells.IsOpen(Trunc(srl.GaussRand(6221,150))) then
+      RaiseException('Well this was unexpected!');
+    
+    Spells.MouseOver(CAST_SUPERHEAT_ITEM);
+    GaussWait(107, 25);
+    Mouse.Click(mouse_left);
+
+    if not Inventory.IsOpen(Trunc(srl.GaussRand(5439,150))) then
+      RaiseException('Well this was unexpected, maybe we are out of nature runes?!');
+    
+    if Inventory.FindItem(NatureRune,1) = [] then
+      RaiseException('We are all out of nature rune!');
+
+    Inventory.MouseSlot(i, mouse_move);
+    GaussWait(107, 25);
+    if MainScreen.IsUpText(['heat']) then
+      Mouse.Click(mouse_left)
+    else
+      RaiseException('Well this was unexpected!');
+
+    GaussWait(265, 43);
+    if (srl.NormalRange(0,9) <> 0) and (i <> MAIN_ORE.Count) then
+    begin
+      B := Spells.GetSpellBounds(CAST_SUPERHEAT_ITEM);
+      B.Expand(srl.NormalRange(5,32));
+      Mouse.Move(B);
+    end;
+  end;
+  GaussWait(1319, 130);
+end;
+
+function Withdraw(): Boolean;
+begin
+  BankScreen.Open(BankerType);           GaussWait(87, 15);
+  Inventory.MouseSlot(1);                GaussWait(107, 25);
+  ChooseOption.Open();                   GaussWait(207, 35);
+  ChooseOption.Select(['Deposit-All']);  GaussWait(120, 30);
+  
+  if not BankScreen.Withdraw(MAIN_ORE.Slot, MAIN_ORE.Count, [MAIN_ORE.Uptext]) then
+    RaiseException('Need more '+MAIN_ORE.Uptext);
+  GaussWait(125, 30);
+  if not BankScreen.Withdraw(FUEL_ORE.Slot, FUEL_ORE.Count, [FUEL_ORE.Uptext]) then
+    RaiseException('Need more '+FUEL_ORE.Uptext);
+  GaussWait(320, 50);
+  BankScreen.Close();
+end;
+
+begin
+  SMART.Init();
+  Inventory.Open();
+  if Inventory.FindItem(NatureRune,1) = [] then
+    RaiseException('We are all out of nature runes!');
+
+  repeat
+    Withdraw();
+    Superheat();
+  until False;
+end.
+
