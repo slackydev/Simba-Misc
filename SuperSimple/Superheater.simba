@@ -7,9 +7,10 @@ program SuperSimple_Superheater;
 
   Steps to use:
    1. Login your player.
-   2. place nature runes in your inventory.
+   2. place nature runes in your inventory, and hold a firestaff.
    3. Setup the lines right bellow here. 
-   4. Press Run
+   4. place yourself near the specified bank.
+   5. Press Run
 *)
 
 type
@@ -18,9 +19,9 @@ type
     Slot, Count: Int32;
   end;
 
-var //setup this       | ore name | bankslot | count to withdraw |
-  MAIN_ORE: TOreInfo = ['Mithril ore', 0, 5];
-  FUEL_ORE: TOreInfo = ['Coal', 1, WITHDRAW_ALL];
+var //--- SETUP ---\\
+  MAIN_ORE: TOreInfo = ['Mithril ore', 0, 5];     //mithril, bankslot=0, 5 ores
+  FUEL_ORE: TOreInfo = ['Coal', 1, WITHDRAW_ALL]; //coal, bankslot=1, fill up inventory.
   Location := blVarrockWest;
 
 var
