@@ -3,11 +3,10 @@ program SuperSimple_Superheater;
 {$I SRL/OSR.simba}
 (*
   SuperSimple Superheater™
-  Copyright © 2016 by Jarl `slacky` Holta 
 
   Steps to use:
    1. Login your player.
-   2. place nature runes in your inventory, and hold a firestaff.
+   2. place many nature runes in your inventory, and hold a firestaff.
    3. Setup the lines right bellow here. 
    4. place yourself near the specified bank.
    5. Press Run
@@ -20,8 +19,8 @@ type
   end;
 
 var //--- SETUP ---\\
-  MAIN_ORE: TOreInfo = ['Mithril ore', 0, 5];     //mithril, bankslot=0, 5 ores
-  FUEL_ORE: TOreInfo = ['Coal', 1, WITHDRAW_ALL]; //coal, bankslot=1, fill up inventory.
+  MAIN_ORE: TOreInfo = ['Mithril ore', 0, 5];     //mithril, in bankslot 0, withdraw 5 ores
+  FUEL_ORE: TOreInfo = ['Coal', 1, WITHDRAW_ALL]; //coal, bankslot 1, fill up inventory.
   Location := blVarrockWest;
 
 var
