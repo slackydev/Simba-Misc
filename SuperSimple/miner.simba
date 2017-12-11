@@ -33,11 +33,9 @@ end;
 // Miner
 
 function TMiner.ContainsOre(R: TRectangle): Boolean;
-var
-  TPA: TPointArray;
+var TPA: TPointArray;
 begin
-  srl.FindColors(TPA, CTS2(2371664, 15), R.Bounds);
-  Result := Length(TPA) > 150;
+  Result := srl.FindColors(TPA, CTS2(2371664, 15), R.Bounds) > 150;
 end;
 
 function TMiner.FindOres(Locations: TPointArray): TRectArray;
