@@ -50,7 +50,7 @@ begin
   me := RSW.GetMyPos();
   for i:=0 to High(IRON_CLUSTER) do
   begin
-    rect := WorldToMSTile(me, IRON_CLUSTER[i], -1).Expand(-2);
+    rect := WorldToMSTile(me, IRON_CLUSTER[i], -2).Expand(-2);
     if MainScreen.GetBounds.Contains(rect.Bounds) then
       Result += rect;
   end;
