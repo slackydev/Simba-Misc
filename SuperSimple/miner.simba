@@ -6,18 +6,17 @@ program SuperSimple_Miner;
 
 type
   TMiner = record
-    Buffer: TMufasaBitmap;
     PlayerBox: TBox;
+    OreLocation: TPointArray;
+    BankPath: TPointArray;
+    zOffset: Int32;
   end;
 
-var
-  FROM_BANK: TPointArray := [[4822, 2769], [4838, 2737], [4887, 2737], [4928, 2755], [4951, 2792], [4972, 2827], [4973, 2867], [4977, 2899], [4979, 2928], [4966, 2949], [4955, 2976]];
-  TO_BANK  : TPointArray := FROM_BANK.Reversed();
-  IRON_CLUSTER: TPointArray := [[4951, 2976], [4955, 2972]];
 
 var
   miner: TMiner;
   RSW: TRSWalker;
+
 
 function WorldToMSTile(me, MMLoc: TPoint; z: Double = 0): TRectangle;
 var
@@ -48,9 +47,9 @@ var
   rect: TRectangle;
 begin
   me := RSW.GetMyPos();
-  for i:=0 to High(IRON_CLUSTER) do
+  for i:=0 to High(self.OreLocation) do
   begin
-    rect := WorldToMSTile(me, IRON_CLUSTER[i], -2).Expand(-2);
+    rect := WorldToMSTile(me, self.OreLocation[i], -2).Expand(self.zOffset);
     if MainScreen.GetBounds.Contains(rect.Bounds) then
       Result += rect;
   end;
@@ -90,22 +89,23 @@ end;
 
 procedure TMiner.DoBanking();
 begin
-  RSW.WalkPath(TO_BANK);
+  RSW.WalkPath(self.BankPath.Reversed);
 
   if BankScreen.Open(blVarrockEast) then
   begin
     BankScreen.DepositAll;
-    RSW.WalkPath(FROM_BANK);
+    RSW.WalkPath(self.BankPath);
   end;
 end;
 
 procedure TMiner.Init();
 begin
-  FROM_BANK := RSWUtils.BuildPath(FROM_BANK, 10);
-  TO_BANK   := RSWUtils.BuildPath(TO_BANK,   10);
+  self.OreLocation := [[4950, 2976], [4954, 2972]];
+  self.BankPath    := [[4822, 2769], [4838, 2737], [4887, 2737], [4928, 2755], [4951, 2792], [4972, 2827], [4973, 2867], [4977, 2899], [4979, 2928], [4966, 2949], [4954, 2976]];
+  self.zOffset     := -2;
 
-  self.Buffer := GetMufasaBitmap(CreateBitmap(smart.Image.GetWidth, smart.Image.GetHeight));
-  self.PlayerBox := Minimap.VecToMsRect(Vec3(MM2MS.MMCX,MM2MS.MMCY,3)).Expand(8).Bounds;
+  self.PlayerBox := Minimap.VecToMsRect(Vec3(MM2MS.MMCX,MM2MS.MMCY,2)).Expand(7).Bounds;
+  self.BankPath  := RSWUtils.BuildPath(self.BankPath, 10);
 end;
 
 
@@ -130,6 +130,4 @@ begin
     smart.Image.DrawBox(miner.PlayerBox, False, $666666);
     miner.Mine();
   end;
-
-  miner.Buffer.Free;
 end.
