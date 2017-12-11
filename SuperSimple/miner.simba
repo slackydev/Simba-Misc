@@ -19,22 +19,6 @@ var
   miner: TMiner;
   RSW: TRSWalker;
 
-procedure DrawBox(box: TBox; color: Int32);
-begin
-  if not MainScreen.GetBounds.Contains(box) then Exit;
-  Smart.Image.DrawBox(box, False, color);
-end;
-
-function WorldToMSBox(me, MMLoc: TPoint; z: Double = 0): TBox;
-var
-  angle: Double;
-begin
-  MMLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (MMLoc - me);
-  angle := minimap.GetCompassAngle(False);
-  MMLoc := MMLoc.Rotate(angle, Point(MM2MS.MMCX, MM2MS.MMCY));
-  Result:= Minimap.VecToMSBox(Vec3(MMLoc.x, MMLoc.y, z), angle);
-end;
-
 function WorldToMSTile(me, MMLoc: TPoint; z: Double = 0): TRectangle;
 var
   angle: Double;
@@ -43,16 +27,6 @@ begin
   angle := minimap.GetCompassAngle(False);
   MMLoc := MMLoc.Rotate(angle, Point(MM2MS.MMCX, MM2MS.MMCY));
   Result:= Minimap.VecToMSRect(Vec3(MMLoc.x, MMLoc.y, z), angle);
-end;
-
-function WorldToMS(me, MMLoc: TPoint; z: Double = 0): TPoint;
-var
-  angle: Double;
-begin
-  MMLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (MMLoc - me);
-  angle := minimap.GetCompassAngle(False);
-  MMLoc := MMLoc.Rotate(angle, Point(MM2MS.MMCX, MM2MS.MMCY));
-  Result:= Minimap.VecToMS(Vec3(MMLoc.x, MMLoc.y, z), angle);
 end;
 
 
