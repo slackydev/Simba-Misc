@@ -9,7 +9,7 @@ type
     PlayerBox: TBox;
     OreLocation: TPointArray;
     BankPath: TPointArray;
-    zOffset: Int32;
+    zOffset: Double;
   end;
 
 
@@ -49,7 +49,7 @@ begin
   me := RSW.GetMyPos();
   for i:=0 to High(self.OreLocation) do
   begin
-    rect := WorldToMSTile(me, self.OreLocation[i], -2).Expand(self.zOffset);
+    rect := WorldToMSTile(me, self.OreLocation[i], self.zOffset).Expand(-2);
     if MainScreen.GetBounds.Contains(rect.Bounds) then
       Result += rect;
   end;
@@ -100,9 +100,9 @@ end;
 
 procedure TMiner.Init();
 begin
-  self.OreLocation := [[4950, 2976], [4954, 2972]];
+  self.OreLocation := [[4951, 2976], [4955, 2972]];
   self.BankPath    := [[4822, 2769], [4838, 2737], [4887, 2737], [4928, 2755], [4951, 2792], [4972, 2827], [4973, 2867], [4977, 2899], [4979, 2928], [4966, 2949], [4954, 2976]];
-  self.zOffset     := -2;
+  self.zOffset     := -1.5;
 
   self.PlayerBox := Minimap.VecToMsRect(Vec3(MM2MS.MMCX,MM2MS.MMCY,2)).Expand(7).Bounds;
   self.BankPath  := RSWUtils.BuildPath(self.BankPath, 10);
