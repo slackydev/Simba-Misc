@@ -1,0 +1,161 @@
+program SuperSimple_Miner;
+{$DEFINE SMART}
+{$I SRL/OSR.simba}
+{$I RSWalker/Walker.simba}
+{$H-}
+
+type
+  TMiner = record
+    Buffer: TMufasaBitmap;
+    PlayerBox: TBox;
+  end;
+
+var
+  FROM_BANK: TPointArray := [[4822, 2769], [4838, 2737], [4887, 2737], [4928, 2755], [4951, 2792], [4972, 2827], [4973, 2867], [4977, 2899], [4979, 2928], [4966, 2949], [4955, 2976]];
+  TO_BANK  : TPointArray := FROM_BANK.Reversed();
+  IRON_CLUSTER: TPointArray := [[4951, 2976], [4955, 2972]];
+
+var
+  miner: TMiner;
+  RSW: TRSWalker;
+
+procedure DrawBox(box: TBox; color: Int32);
+begin
+  if not MainScreen.GetBounds.Contains(box) then Exit;
+  Smart.Image.DrawBox(box, False, color);
+end;
+
+function WorldToMSBox(me, MMLoc: TPoint; z: Double = 0): TBox;
+var
+  angle: Double;
+begin
+  MMLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (MMLoc - me);
+  angle := minimap.GetCompassAngle(False);
+  MMLoc := MMLoc.Rotate(angle, Point(MM2MS.MMCX, MM2MS.MMCY));
+  Result:= Minimap.VecToMSBox(Vec3(MMLoc.x, MMLoc.y, z), angle);
+end;
+
+function WorldToMSTile(me, MMLoc: TPoint; z: Double = 0): TRectangle;
+var
+  angle: Double;
+begin
+  MMLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (MMLoc - me);
+  angle := minimap.GetCompassAngle(False);
+  MMLoc := MMLoc.Rotate(angle, Point(MM2MS.MMCX, MM2MS.MMCY));
+  Result:= Minimap.VecToMSRect(Vec3(MMLoc.x, MMLoc.y, z), angle);
+end;
+
+function WorldToMS(me, MMLoc: TPoint; z: Double = 0): TPoint;
+var
+  angle: Double;
+begin
+  MMLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (MMLoc - me);
+  angle := minimap.GetCompassAngle(False);
+  MMLoc := MMLoc.Rotate(angle, Point(MM2MS.MMCX, MM2MS.MMCY));
+  Result:= Minimap.VecToMS(Vec3(MMLoc.x, MMLoc.y, z), angle);
+end;
+
+
+// -----------------------------------------------------------------------------
+// Miner
+
+function TMiner.ContainsOre(R: TRectangle): Boolean;
+var
+  TPA: TPointArray;
+begin
+  srl.FindColors(TPA, CTS2(2371664, 15), R.Bounds);
+  Result := Length(TPA) > 50;
+end;
+
+function TMiner.FindOres(): TRectArray;
+var
+  i: Int32;
+  me: TPoint;
+  rect: TRectangle;
+begin
+  me := RSW.GetMyPos();
+  for i:=0 to High(IRON_CLUSTER) do
+  begin
+    rect := WorldToMSTile(me, IRON_CLUSTER[i], -1).Expand(-2);
+    if MainScreen.GetBounds.Contains(rect.Bounds) then
+      Result += rect;
+  end;
+end;
+
+procedure TMiner.Mine();
+var
+  i,j,next: Int32;
+  TRA: TRectArray;
+begin
+  TRA := FindOres();
+  for i:=0 to High(TRA) do
+  begin
+    if not ContainsOre(TRA[i]) then
+      continue;
+
+    mouse.Move(TRA[i].Mean, Round(TRA[i].Radius));
+    if not Mainscreen.IsUpText(['Mine', 'Rocks']) then
+      Continue;
+
+    if not Mouse.Click(ctRed) then
+      continue;
+
+    smart.Image.DrawTPA(TRA[i].ToTPA.Connect, $00FF00);
+    srl.NormalWait(300,600, wdLeft);
+
+    next := (i + 1) mod Length(TRA);
+    mouse.Move(TRA[next].Mean, Round(TRA[next].Radius));
+
+    j := GetTimeRunning() + srl.NormalRange(3500,5000);
+    while (GetTimeRunning() < j) and (srl.IsAnimating(PlayerBox, 500,700) or ContainsOre(TRA[i])) do
+      Wait(10);
+
+    break;
+  end;
+end;
+
+procedure TMiner.DoBanking();
+begin
+  RSW.WalkPath(TO_BANK);
+
+  if BankScreen.Open(blVarrockEast) then
+  begin
+    BankScreen.DepositAll;
+    RSW.WalkPath(FROM_BANK);
+  end;
+end;
+
+procedure TMiner.Init();
+begin
+  FROM_BANK := RSWUtils.BuildPath(FROM_BANK, 10);
+  TO_BANK   := RSWUtils.BuildPath(TO_BANK,   10);
+
+  self.Buffer := GetMufasaBitmap(CreateBitmap(smart.Image.GetWidth, smart.Image.GetHeight));
+  self.PlayerBox := Minimap.VecToMsRect(Vec3(MM2MS.MMCX,MM2MS.MMCY,3)).Expand(8).Bounds;
+end;
+
+
+begin
+  smart.EnableDrawing := True;
+  smart.Init;
+
+  RSW.Init('world.png');
+  RSW.skipClose := 25;
+  RSW.walkStyle := wsSPS;
+  Miner.Init();
+
+  while True do
+  begin
+    if Inventory.IsFull then
+    begin
+      smart.Image.Clear();
+      miner.DoBanking;
+    end;
+
+    smart.Image.Clear();
+    smart.Image.DrawBox(miner.PlayerBox, False, $666666);
+    miner.Mine();
+  end;
+
+  miner.Buffer.Free;
+end.
