@@ -9,7 +9,7 @@ type
     PlayerBox: TBox;
     OreLocation: TPointArray;
     BankPath: TPointArray;
-    zOffset: Double;
+    Offset: Vector3;
   end;
 
 
@@ -18,14 +18,14 @@ var
   RSW: TRSWalker;
 
 
-function WorldToMSTile(me, MMLoc: TPoint; z: Double = 0): TRectangle;
+function WorldToMSTile(me, MMLoc: TPoint; z,offx,offy:Double=0): TRectangle;
 var
   angle: Double;
 begin
   MMLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (MMLoc - me);
   angle := minimap.GetCompassAngle(False);
   MMLoc := MMLoc.Rotate(angle, Point(MM2MS.MMCX, MM2MS.MMCY));
-  Result:= Minimap.VecToMSRect(Vec3(MMLoc.x, MMLoc.y, z), angle);
+  Result:= Minimap.VecToMSRect(Vec3(MMLoc.x-offx, MMLoc.y-offy, z), angle);
 end;
 
 
@@ -37,19 +37,19 @@ var
   TPA: TPointArray;
 begin
   srl.FindColors(TPA, CTS2(2371664, 15), R.Bounds);
-  Result := Length(TPA) > 50;
+  Result := Length(TPA) > 150;
 end;
 
-function TMiner.FindOres(): TRectArray;
+function TMiner.FindOres(Locations: TPointArray): TRectArray;
 var
   i: Int32;
   me: TPoint;
   rect: TRectangle;
 begin
   me := RSW.GetMyPos();
-  for i:=0 to High(self.OreLocation) do
+  for i:=0 to High(Locations) do
   begin
-    rect := WorldToMSTile(me, self.OreLocation[i], self.zOffset).Expand(-2);
+    rect := WorldToMSTile(me, Locations[i], Offset.z,Offset.x,Offset.y).Expand(-2);
     if MainScreen.GetBounds.Contains(rect.Bounds) then
       Result += rect;
   end;
@@ -60,7 +60,7 @@ var
   i,j,next: Int32;
   TRA: TRectArray;
 begin
-  TRA := FindOres();
+  TRA := FindOres(self.OreLocation);
   for i:=0 to High(TRA) do
   begin
     if not ContainsOre(TRA[i]) then
@@ -80,7 +80,7 @@ begin
     mouse.Move(TRA[next].Mean, Round(TRA[next].Radius));
 
     j := GetTimeRunning() + srl.NormalRange(3500,5000);
-    while (GetTimeRunning() < j) and (srl.IsAnimating(PlayerBox, 500,700) or ContainsOre(TRA[i])) do
+    while (GetTimeRunning() < j) and (Minimap.isPlayerMoving() or ContainsOre(TRA[i])) do
       Wait(10);
 
     break;
@@ -102,10 +102,11 @@ procedure TMiner.Init();
 begin
   self.OreLocation := [[4951, 2976], [4955, 2972]];
   self.BankPath    := [[4822, 2769], [4838, 2737], [4887, 2737], [4928, 2755], [4951, 2792], [4972, 2827], [4973, 2867], [4977, 2899], [4979, 2928], [4966, 2949], [4954, 2976]];
-  self.zOffset     := -1.5;
+  self.Offset.x :=  0.5;
+  self.Offset.y := -0.5;
 
   self.PlayerBox := Minimap.VecToMsRect(Vec3(MM2MS.MMCX,MM2MS.MMCY,2)).Expand(7).Bounds;
-  self.BankPath  := RSWUtils.BuildPath(self.BankPath, 10);
+  self.BankPath  := RSWUtils.BuildPath(self.BankPath, 8);
 end;
 
 
