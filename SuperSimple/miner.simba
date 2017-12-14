@@ -10,32 +10,148 @@ type
     OreLocation: TPointArray;
     BankPath: TPointArray;
     Offset: Vector3;
+
+    MiningSite: TPointArray;
+
+    //
+    rndCalls: Int32;
   end;
+
+const
+  IRON_COLOR   = 2371664;
+  COPPER_COLOR = 2508395;
 
 
 var
   miner: TMiner;
   RSW: TRSWalker;
 
-
-function WorldToMSTile(me, MMLoc: TPoint; z,offx,offy:Double=0): TRectangle;
+function WorldToMSTile(Me, ObjLoc: TPoint; Height:Double=0; Offx,Offy:Double=0): TRectangle;
 var
   angle: Double;
 begin
-  MMLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (MMLoc - me);
-  angle := minimap.GetCompassAngle(False);
-  MMLoc := MMLoc.Rotate(angle, Point(MM2MS.MMCX, MM2MS.MMCY));
-  Result:= Minimap.VecToMSRect(Vec3(MMLoc.x-offx, MMLoc.y-offy, z), angle);
+  ObjLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (ObjLoc - Me);
+  angle  := minimap.GetCompassAngle(False);
+  ObjLoc := ObjLoc.Rotate(angle, Point(MM2MS.MMCX, MM2MS.MMCY));
+  Result := Minimap.VecToMSRect(Vec3(ObjLoc.x - offx, ObjLoc.y - offy, Height), angle);
+end;
+
+procedure MouseOffClient(direction: Byte);
+var
+  i,W,H: Int32;
+  pt: TPoint;
+begin
+  GetClientDimensions(W, H);
+  pt := Mouse.GetPosition();
+  if (pt.X < 0) or (pt.X > W) or (pt.Y < 0) or (pt.Y > H) then
+    Exit();
+  if (direction >= 4) then
+    direction := Random(0,3);
+  case direction of
+    0: Mouse.Move(Box(-300, -300, W, 0)); // top
+    1: Mouse.Move(Box(0, H, W, H+300));   // bottom
+    2: Mouse.Move(Box(0-300, 0, 0, H));   // left
+    3: Mouse.Move(Box(W, 0, W+300, H));   // right
+  end;
 end;
 
 
 // -----------------------------------------------------------------------------
 // Miner
+procedure TMiner.DeclarePlayers();
+begin
+  with Players.New()^ do
+  begin
+    LoginName := '';
+    Password  := '';
+    IsActive  := True;
+    IsMember  := False;
+    World     := 384;
+  end;
+  Players.SetCurrent(0);
+end;
+
+
+
+procedure TMiner.AntiBan();
+var
+  a, CPH:Double;
+begin
+  Inc(rndCalls);
+  CPH := Max(1, rndCalls / (GetTimeRunning() / (1000*60*60)));
+  case Random(round(CPH) * 24) of
+    0..72: //72 == 3 per hour
+      begin
+        stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000), Random(0,4) > 1);
+        WriteLn('>>> Check stats: ', (GetTimeRunning() / (1000*60*60)));
+      end;
+
+    73..85: //12 == 1 per hour
+      begin
+        Stats.Open();
+        WaitEx(5000,500);
+        Inventory.Open();
+      end;
+
+    86..98: //12 == 1 per hour
+      begin
+        WriteLn('>>> Taking a mini-break');
+        if Random(2)=0 then MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
+        WaitEx(65000,10000);
+
+        if not(srl.isLoggedIn()) then
+          Players.GetCurrent()^.Login();
+
+        Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000));
+      end;
+
+    100..105: //6 == every two hours
+      begin
+        WriteLn('>>> Doing stuffs');
+        if Random(2) = 0 then
+          Gametabs.Open(tabFriends);
+
+        WaitEx(3000,500);
+        if Random(0, 9) = 0 then
+        begin
+          if Random(2)=0 then MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
+          WaitEx(30000,2500);
+        end;
+
+        if Random(0, 9) > 3 then
+        begin
+          Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000), Random(0,4) > 1);
+          WaitEx(2000,500);
+        end;
+      end;
+
+    110..113: //3 == every four hours
+      begin
+        a := srl.NormalRange(1000*60*30.0, 1000*60*7);
+        WriteLn('>>> Taking a break for ', Round(a/1000/60), ' minutes');
+        Logout.Open();            WaitEx(700,100);
+        logout.ClickLogout();     WaitEx(700,100);
+        MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
+        Wait(Max(0,Round(a)));
+
+        if not(srl.isLoggedIn()) then
+          Players.GetCurrent()^.Login();
+      end;
+  end;
+end;
+
+procedure TMiner.PostAction();
+begin
+  WaitEx(500,70);
+  AntiBan;
+end;
 
 function TMiner.ContainsOre(R: TRectangle): Boolean;
 var TPA: TPointArray;
 begin
-  Result := srl.FindColors(TPA, CTS2(2371664, 15), R.Bounds) > 150;
+  Result := srl.FindColors(TPA, CTS2(IRON_COLOR, 15), R.Bounds) > 150;
+  if Result then Exit;
+  Result := srl.FindColors(TPA, CTS2(COPPER_COLOR, 15), R.Bounds) > 150;
 end;
 
 function TMiner.FindOres(Locations: TPointArray): TRectArray;
@@ -53,7 +169,7 @@ begin
   end;
 end;
 
-procedure TMiner.Mine();
+function TMiner.Mine(): Boolean;
 var
   i,j,next: Int32;
   TRA: TRectArray;
@@ -72,61 +188,94 @@ begin
       continue;
 
     smart.Image.DrawTPA(TRA[i].ToTPA.Connect, $00FF00);
-    srl.NormalWait(300,600, wdLeft);
+    PostAction;
 
     next := (i + 1) mod Length(TRA);
     mouse.Move(TRA[next].Mean, Round(TRA[next].Radius));
 
-    j := GetTimeRunning() + srl.NormalRange(3500,5000);
+    j := GetTimeRunning() + srl.NormalRange(8500,12000);
     while (GetTimeRunning() < j) and (Minimap.isPlayerMoving() or ContainsOre(TRA[i])) do
+    begin
+      Chatbox.HandleLevelUp();
+      AntiBan;
       Wait(10);
-
-    break;
+    end;
+    Exit(True);
   end;
 end;
 
 procedure TMiner.DoBanking();
 begin
   RSW.WalkPath(self.BankPath.Reversed);
+  AntiBan;
 
   if BankScreen.Open(blVarrockEast) then
   begin
+    PostAction;
     BankScreen.DepositAll;
+
+    PostAction;
     RSW.WalkPath(self.BankPath);
+    AntiBan;
+  end else
+  begin
+    WriteLn('Terminating: Failed to open bank');
+    TerminateScript;
   end;
 end;
 
 procedure TMiner.Init();
 begin
-  self.OreLocation := [[4951, 2976], [4955, 2972]];
-  self.BankPath    := [[4822, 2769], [4838, 2737], [4887, 2737], [4928, 2755], [4951, 2792], [4972, 2827], [4973, 2867], [4977, 2899], [4979, 2928], [4966, 2949], [4954, 2976]];
+  self.OreLocation := [[4951+4, 2976+16], [4955+4, 2972+16]];
+  self.BankPath    := [[4822, 2769], [4838, 2737], [4887, 2737], [4928, 2755], [4951, 2792], [4972, 2827], [4973, 2867], [4977, 2899], [4979, 2928], [4966, 2949], [4954, 2976+16]];
   self.Offset.x :=  0.5;
   self.Offset.y := -0.5;
 
   self.PlayerBox := Minimap.VecToMsRect(Vec3(MM2MS.MMCX,MM2MS.MMCY,2)).Expand(7).Bounds;
   self.BankPath  := RSWUtils.BuildPath(self.BankPath, 8);
+  self.MiningSite := [[4926, 2958], [4953, 2952], [4978, 2953], [4970, 3001], [4935, 2999]];
+
+  self.DeclarePlayers();
+
+  Players.GetCurrent()^.Login();
+  mainscreen.SetAngle(True);
 end;
 
 
+var
+  trips: Int32;
 begin
   smart.EnableDrawing := True;
-  smart.Init;
+  srl.Setup();
 
   RSW.Init('world.png');
   RSW.skipClose := 25;
   RSW.walkStyle := wsSPS;
   Miner.Init();
 
-  while True do
+  while SRL.isLoggedIn() do
   begin
     if Inventory.IsFull then
     begin
       smart.Image.Clear();
       miner.DoBanking;
+
+      if not RSWUtils.InPoly(RSW.GetMyPos, miner.MiningSite) then
+      begin
+        WriteLn('Terminating: Failed to walk to mine');
+        TerminateScript();
+      end;
+      Inc(trips);
     end;
 
     smart.Image.Clear();
     smart.Image.DrawBox(miner.PlayerBox, False, $666666);
-    miner.Mine();
+    if miner.Mine() then
+    begin
+      WriteLn('-----------------');
+      WriteLn('Trips  : ', trips);
+      WriteLn('Runtime: ', Round(GetTimeRunning/1000/60), ' minutes');
+      miner.AntiBan;
+    end;
   end;
 end.
