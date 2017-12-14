@@ -1,30 +1,30 @@
-program SuperSimple_Miner;
+program SuperSimple_DrynorFisher;
 {$DEFINE SMART}
 {$I SRL/OSR.simba}
 {$I RSWalker/Walker.simba}
 {$H-}
 
 type
-  TMiner = record
+  TFishingstyle = (fsNetFishing, fsBaitFishing);
+
+  TFisher = record
     PlayerBox: TBox;
-    OreLocation: TPointArray;
+    Spots: TPointArray;
     BankPath: TPointArray;
     Offset: Vector3;
 
-    MiningSite: TPointArray;
+    AreaPoly: TPointArray;
 
-    //
-    rndCalls: Int32;
+    Style: TFishingstyle;
+
+    // randomness
+    RndCalls: Int32;
+    HoverSkill: Byte;
   end;
-
-const
-  IRON_COLOR   = 2371664;
-  COPPER_COLOR = 2508395;
-
 
 
 var
-  miner: TMiner;
+  bot: TFisher;
   RSW: TRSWalker;
 
 
@@ -60,7 +60,7 @@ end;
 
 // -----------------------------------------------------------------------------
 // Miner
-procedure TMiner.DeclarePlayers();
+procedure TFisher.DeclarePlayers();
 begin
   with Players.New()^ do
   begin
@@ -75,7 +75,7 @@ end;
 
 
 
-procedure TMiner.AntiBan();
+procedure TFisher.AntiBan();
 var
   a, CPH:Double;
 begin
@@ -84,7 +84,7 @@ begin
   case Random(round(CPH) * 24) of
     0..72: //72 == 3 per hour
       begin
-        stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000), Random(0,4) > 1);
+        stats.HoverSkill(self.HoverSkill, srl.NormalRange(4000,6000), Random(0,4) > 1);
         WriteLn('>>> Check stats: ', (GetTimeRunning() / (1000*60*60)));
       end;
 
@@ -104,7 +104,7 @@ begin
         if not(srl.isLoggedIn()) then
           Players.GetCurrent()^.Login();
 
-        Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000));
+        Stats.HoverSkill(self.HoverSkill, srl.NormalRange(4000,6000));
       end;
 
     100..105: //6 == every two hours
@@ -122,7 +122,7 @@ begin
 
         if Random(0, 9) > 3 then
         begin
-          Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000), Random(0,4) > 1);
+          Stats.HoverSkill(self.HoverSkill, srl.NormalRange(4000,6000), Random(0,4) > 1);
           WaitEx(2000,500);
         end;
       end;
@@ -142,100 +142,136 @@ begin
   end;
 end;
 
-procedure TMiner.PostAction();
+procedure TFisher.PostAction(DoAntiBan:Boolean=True);
 begin
-  WaitEx(500,70);
-  AntiBan;
+  WaitEx(600,70);
+  if DoAntiBan then AntiBan;
 end;
 
-function TMiner.ContainsOre(R: TRectangle): Boolean;
-var TPA: TPointArray;
+function TFisher.Contains(R: TRectangle): Boolean;
 begin
-  Result := srl.FindColors(TPA, CTS2(IRON_COLOR, 15), R.Bounds) > 150;
-  if Result then Exit;
-  Result := srl.FindColors(TPA, CTS2(COPPER_COLOR, 15), R.Bounds) > 150;
+  Result := srl.IsAnimating(R.Bounds, 10, 100);
+  if Mainscreen.GetBounds.Contains( R.Bounds() ) then
+  begin
+    if Result then smart.Image.DrawTPA(R.ToTPA.Connect, $00FF00)
+    else           smart.Image.DrawTPA(R.ToTPA.Connect, $0000FF);
+  end;
 end;
 
-function TMiner.FindOres(Locations: TPointArray): TRectArray;
+function TFisher.Find(Spots: TPointArray): TRectArray;
 var
   i: Int32;
   me: TPoint;
   rect: TRectangle;
 begin
   me := RSW.GetMyPos();
-  for i:=0 to High(Locations) do
+  for i:=0 to High(Spots) do
   begin
-    rect := WorldToMSTile(me, Locations[i], Offset.z,Offset.x,Offset.y).Expand(-2);
+    rect := WorldToMSTile(me, Spots[i], Offset.z,Offset.x,Offset.y);
     if MainScreen.GetBounds.Contains(rect.Bounds) then
       Result += rect;
   end;
 end;
 
-function TMiner.Mine(): Boolean;
+function TFisher.Work(): Boolean;
 var
-  i,j,next: Int32;
+  i,invSize: Int32;
+  t: TCountDown;
   TRA: TRectArray;
+  R: TRectangle;
+  Option: string;
 begin
-  TRA := FindOres(self.OreLocation);
+  smart.Image.Clear();
+  TRA := Find(self.Spots);
   for i:=0 to High(TRA) do
   begin
-    if not ContainsOre(TRA[i]) then
+    if not Contains(TRA[i]) then
       continue;
 
     mouse.Move(TRA[i].Mean, Round(TRA[i].Radius));
-    if not Mainscreen.IsUpText(['Mine', 'Rocks']) then
+    if not Mainscreen.IsUpText(['Fishing', 'spot']) then
       Continue;
 
-    if not Mouse.Click(ctRed) then
-      continue;
+    if (Style = fsNetFishing)  then Option := 'Net Fishing';
+    if (Style = fsBaitFishing) then Option := 'Bait Fishing';
+    if not ChooseOption.Select(Option) then
+      Continue;
 
-    smart.Image.DrawTPA(TRA[i].ToTPA.Connect, $00FF00);
+    PostAction;
+    while minimap.isPlayerMoving(250) do Wait(60);
     PostAction;
 
-    next := (i + 1) mod Length(TRA);
-    mouse.Move(TRA[next].Mean, Round(TRA[next].Radius));
+    TRA := Find(self.Spots);
+    smart.Image.Clear();
 
-    j := GetTimeRunning() + srl.NormalRange(8500,12000);
-    while (GetTimeRunning() < j) and (Minimap.isPlayerMoving() or ContainsOre(TRA[i])) do
+    t.Init(Trunc(srl.GaussRand(33000,900)));
+    invSize := Length(Inventory.GetUsedSlots);
+    while (not t.IsFinished) and Self.Contains(TRA[i]) and srl.IsAnimating(PlayerBox,40,400,3) do
     begin
+      if invSize < Length(Inventory.GetUsedSlots) then
+      begin
+        invSize := Length(Inventory.GetUsedSlots);
+        t.Restart();
+      end;
       Chatbox.HandleLevelUp();
       AntiBan;
-      Wait(10);
+
+      smart.Image.DrawTPA(TRA[i].ToTPA.Connect, 0);
+      TRA := Find(self.Spots);
+      self.Contains(TRA[i]);
     end;
     Exit(True);
   end;
 end;
 
-procedure TMiner.DoBanking();
+procedure TFisher.DoBanking();
+  procedure DoInventory();
+  var
+    slots: TIntArray;
+  begin
+    slots := Inventory.GetUsedSlots();
+    slots.Del(0,Ord(self.Style)+2);
+    while Length(slots) > 0 do
+    begin
+      Inventory.MouseSlot(slots[0]);
+      ChooseOption.Select(['Deposit-All']);
+      while Inventory.IsSlotUsed(slots[0]) do WaitEx(90,10);
+      slots := Inventory.GetUsedSlots();
+      slots.Del(0,2);
+    end;
+  end;
 begin
   RSW.WalkPath(self.BankPath.Reversed);
   AntiBan;
 
-  if BankScreen.Open(blVarrockEast) then
+  if BankScreen.Open(blDrynor) then
   begin
-    PostAction;
-    BankScreen.DepositAll;
-
-    PostAction;
+    PostAction(False);
+    DoInventory();
     RSW.WalkPath(self.BankPath);
     AntiBan;
   end else
   begin
     WriteLn('Terminating: Failed to open bank');
+    Logout.ClickLogout();
     TerminateScript;
   end;
 end;
 
-procedure TMiner.Init();
+procedure TFisher.Init();
 begin
-  self.OreLocation := [[4951+4, 2976+16], [4955+4, 2972+16]];
-  self.BankPath    := [[4822, 2769], [4838, 2737], [4887, 2737], [4928, 2755], [4951, 2792], [4972, 2827], [4973, 2867], [4977, 2899], [4979, 2928], [4966, 2949], [4954, 2976+16]];
-  self.Offset.x :=  0.5;
+  self.Spots    := [[4138, 3504],[4142, 3508],[4142, 3512],[4146, 3516],[4146, 3520],[4150, 3520],[4150, 3524],[4150, 3528],[4154, 3532],[4154, 3532],[4154, 3536],[4154, 3540]];
+  self.BankPath := [[4177, 3473], [4157, 3494], [4154, 3532]];
+  self.Offset.x := -0.5;
   self.Offset.y := -0.5;
+  self.Offset.z := -1;
 
   self.PlayerBox := Minimap.VecToMsRect(Vec3(MM2MS.MMCX,MM2MS.MMCY,2)).Expand(7).Bounds;
   self.BankPath  := RSWUtils.BuildPath(self.BankPath, 8);
-  self.MiningSite := [[4926, 2958], [4953, 2952], [4978, 2953], [4970, 3001], [4935, 2999]];
+  self.AreaPoly  := [[4152, 3506], [4164, 3527], [4168, 3551], [4149, 3553], [4131, 3504]];
+
+  self.Style      := fsNetFishing;
+  self.HoverSkill := SKILL_FISHING;
 
   self.DeclarePlayers();
 
@@ -243,41 +279,68 @@ begin
   mainscreen.SetAngle(True);
 end;
 
+procedure TFisher.DebugSpots();
+var
+  i: Int32;
+  me: TPoint;
+  R: TRectangle;
+begin
+  smart.Image.Clear();
+  me := RSW.GetMyPos();
+  for i:=0 to High(Self.Spots) do
+  begin
+    R := WorldToMSTile(me, self.Spots[i], Offset.z, Offset.y, Offset.x);
+    if MainScreen.GetBounds.Contains(R.Bounds) then
+      smart.Image.DrawTPA(R.ToTPA.Connect, $777777);
+  end;
+end;
+
 
 var
   trips: Int32;
 begin
   smart.EnableDrawing := True;
-  srl.Setup();
+  srl.Setup([]);
 
   RSW.Init('world.png');
   RSW.skipClose := 25;
   RSW.walkStyle := wsSPS;
-  Miner.Init();
+  AddOnTerminate(@RSW.Free);
+
+  bot.Init();
+  bot.DebugSpots();
 
   while SRL.isLoggedIn() do
   begin
     if Inventory.IsFull then
     begin
       smart.Image.Clear();
-      miner.DoBanking;
+      bot.DoBanking;
 
-      if not RSWUtils.InPoly(RSW.GetMyPos, miner.MiningSite) then
+      if not RSWUtils.InPoly(RSW.GetMyPos, bot.AreaPoly) then
       begin
-        WriteLn('Terminating: Failed to walk to mine');
+        WriteLn('Terminating: Failed to walk to spot');
+        Logout.ClickLogout();
         TerminateScript();
       end;
       Inc(trips);
     end;
 
     smart.Image.Clear();
-    smart.Image.DrawBox(miner.PlayerBox, False, $666666);
-    if miner.Mine() then
+    smart.Image.DrawBox(bot.PlayerBox, False, $666666);
+    if bot.Work() then
     begin
       WriteLn('-----------------');
       WriteLn('Trips  : ', trips);
       WriteLn('Runtime: ', Round(GetTimeRunning/1000/60), ' minutes');
-      miner.AntiBan;
+      bot.AntiBan;
+    end;
+
+    if 'bait left' in Chatbox.GetQuery() then
+    begin
+      WriteLn('Terminating: No more bait');
+      Logout.ClickLogout();
+      TerminateScript();
     end;
   end;
 end.
