@@ -244,7 +244,13 @@ begin
   RSW.WalkPath(self.BankPath.Reversed);
   AntiBan;
 
-  if BankScreen.Open(blDrynor) then
+  for 0 to 3 do
+  begin
+    if BankScreen.Open(blDrynor) then Break;
+    WaitEx(1200,160);
+  end;
+
+  if BankScreen.IsOpen() then
   begin
     PostAction(False);
     DoInventory();

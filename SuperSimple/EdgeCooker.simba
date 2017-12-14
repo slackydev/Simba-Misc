@@ -1,0 +1,322 @@
+program SuperSimple_EdgeCooker;
+{$DEFINE SMART}
+{$I SRL/OSR.simba}
+{$I RSWalker/Walker.simba}
+{$H-}
+
+type
+  TCooker = record
+    PlayerBox: TBox;
+    Spots: TPointArray;
+    BankPath: TPointArray;
+    Offset: Vector3;
+
+    ItemNames: TStringArray;
+    BankSlot: Int32;
+
+    // randomness
+    RndCalls: Int32;
+    HoverSkill: Byte;
+  end;
+
+
+var
+  bot: TCooker;
+  RSW: TRSWalker;
+
+
+function WorldToMSTile(Me, ObjLoc: TPoint; Height:Double=0; Offx,Offy:Double=0): TRectangle;
+var
+  angle: Double;
+begin
+  ObjLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (ObjLoc - Me);
+  angle  := minimap.GetCompassAngle(False);
+  ObjLoc := ObjLoc.Rotate(angle, Point(MM2MS.MMCX, MM2MS.MMCY));
+  Result := Minimap.VecToMSRect(Vec3(ObjLoc.x - offx, ObjLoc.y - offy, Height), angle);
+end;
+
+procedure MouseOffClient(direction: Byte);
+var
+  i,W,H: Int32;
+  pt: TPoint;
+begin
+  GetClientDimensions(W, H);
+  pt := Mouse.GetPosition();
+  if (pt.X < 0) or (pt.X > W) or (pt.Y < 0) or (pt.Y > H) then
+    Exit();
+  if (direction >= 4) then
+    direction := Random(0,3);
+  case direction of
+    0: Mouse.Move(Box(-300, -300, W, 0)); // top
+    1: Mouse.Move(Box(0, H, W, H+300));   // bottom
+    2: Mouse.Move(Box(0-300, 0, 0, H));   // left
+    3: Mouse.Move(Box(W, 0, W+300, H));   // right
+  end;
+end;
+
+
+// -----------------------------------------------------------------------------
+// Miner
+procedure TCooker.DeclarePlayers();
+begin
+  with Players.New()^ do
+  begin
+    LoginName := '';
+    Password  := '';
+    IsActive  := True;
+    IsMember  := False;
+    World     := 384;
+  end;
+  Players.SetCurrent(0);
+end;
+
+
+
+procedure TCooker.AntiBan();
+var
+  a, CPH:Double;
+begin
+  Inc(rndCalls);
+  CPH := Max(1, rndCalls / (GetTimeRunning() / (1000*60*60)));
+  case Random(round(CPH) * 24) of
+    0..72: //72 == 3 per hour
+      begin
+        stats.HoverSkill(self.HoverSkill, srl.NormalRange(4000,6000), Random(0,4) > 1);
+        WriteLn('>>> Check stats: ', (GetTimeRunning() / (1000*60*60)));
+      end;
+
+    73..85: //12 == 1 per hour
+      begin
+        Stats.Open();
+        WaitEx(5000,500);
+        Inventory.Open();
+      end;
+
+    86..98: //12 == 1 per hour
+      begin
+        WriteLn('>>> Taking a mini-break');
+        if Random(2)=0 then MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
+        WaitEx(65000,10000);
+
+        if not(srl.isLoggedIn()) then
+          Players.GetCurrent()^.Login();
+
+        Stats.HoverSkill(self.HoverSkill, srl.NormalRange(4000,6000));
+      end;
+
+    100..105: //6 == every two hours
+      begin
+        WriteLn('>>> Doing stuffs');
+        if Random(2) = 0 then
+          Gametabs.Open(tabFriends);
+
+        WaitEx(3000,500);
+        if Random(0, 9) = 0 then
+        begin
+          if Random(2)=0 then MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
+          WaitEx(30000,2500);
+        end;
+
+        if Random(0, 9) > 3 then
+        begin
+          Stats.HoverSkill(self.HoverSkill, srl.NormalRange(4000,6000), Random(0,4) > 1);
+          WaitEx(2000,500);
+        end;
+      end;
+
+    110..113: //3 == every four hours
+      begin
+        a := srl.NormalRange(1000*60*30.0, 1000*60*7);
+        WriteLn('>>> Taking a break for ', Round(a/1000/60), ' minutes');
+        Logout.Open();            WaitEx(700,100);
+        logout.ClickLogout();     WaitEx(700,100);
+        MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
+        Wait(Max(0,Round(a)));
+
+        if not(srl.isLoggedIn()) then
+          Players.GetCurrent()^.Login();
+      end;
+  end;
+end;
+
+function TCooker.PostAction(DoAntiBan:Boolean=True): Boolean;
+begin
+  WaitEx(600,70);
+  if DoAntiBan then AntiBan;
+  Result := True;
+end;
+
+function TCooker.DoWork(): Boolean;
+var
+  i,invSize: Int32;
+  t: TCountDown;
+  rect: TRectangle;
+  Option: string;
+  slots: TIntArray;
+begin
+  smart.Image.Clear();
+  rect := WorldToMSTile(RSW.GetMyPos(), Spots[0], Offset.z,Offset.x,Offset.y);
+  slots := Inventory.GetUsedSlots;
+  Inventory.ActivateSlot(slots[High(slots)]);
+  PostAction;
+
+  mouse.Move(rect.Mean, Round(rect.Radius));
+  if not Mainscreen.IsUpText('Stove') then
+  begin
+    WriteLn('Terminating: Failed to cook');
+    TerminateScript;
+  end;
+  PostAction(False);
+  Mouse.Click(mouse_Left);
+  PostAction(False);
+  while minimap.isPlayerMoving(250) do Wait(60);
+
+  PostAction(False);
+  Mouse.Click(Box(214,390,300,460), mouse_Left);
+
+  PostAction;
+  while minimap.isPlayerMoving(250) do Wait(60);
+  Wait(1000,1600);
+
+  t.Init(Trunc(srl.GaussRand(55000,900)));
+  while (not t.IsFinished) and srl.IsAnimating(PlayerBox,50,700,3) do
+  begin
+    if Chatbox.HandleLevelUp() then
+    begin
+      DoWork();
+      Exit;
+    end;
+    AntiBan;
+  end;
+end;
+
+
+procedure TCooker.SetBankSlot();
+var i,j:Int32;
+begin
+  BankScreen.Open(blEdgeville);
+  for i:=0 to High(Self.ItemNames) do
+    for j:=0 to High(BankScreen.FSlots) do
+    begin
+      mouse.Move(BankScreen.FSlots[j]);
+      Wait(80,150);
+      if ItemNames[i] in BankScreen.GetUpText then
+      begin
+        self.BankSlot := j;
+        Exit;
+      end;
+    end;
+end;
+
+procedure TCooker.HandleDoor();
+var
+  R: TRectangle;
+  B: TBox;
+  TPA: TPointArray;
+  ATPA: T2DPointArray;
+begin
+  B := WorldToMSTile(RSW.GetMyPos, self.Spots[1], 2).Expand(2).Bounds();
+  if not Mainscreen.GetBounds.Contains(B) then
+    Exit;
+
+  if srl.FindColors(TPA, CTS2(1134962, 15), B) > 200 then
+  begin
+    ATPA := ClusterTPA(TPA,3);
+    SortATPAFromSize(ATPA, 0, False);
+    for TPA in ATPA do
+    begin
+      R := TPA.MinAreaRect();
+      Mouse.Move(R.Mean, Trunc(R.Radius));
+      PostAction();
+      if MainScreen.IsUptext('Open Door') then
+      begin
+         Mouse.Click(mouse_Left);
+         PostAction();
+         break;
+      end;
+    end;
+  end;
+end;
+
+
+procedure TCooker.DoBanking();
+begin
+  Self.HandleDoor();
+  RSW.WalkPath(self.BankPath);
+  AntiBan;
+
+  for 0 to 3 do
+  begin
+    if BankScreen.Open(blEdgeville) then Break;
+    WaitEx(1500,190);
+  end;
+
+  if BankScreen.IsOpen() then
+  begin
+    PostAction(False)
+    if self.BankSlot = -1 then
+      self.SetBankSlot();
+
+    BankScreen.DepositAll;
+    PostAction();
+
+    if not BankScreen.Withdraw(self.BankSlot, WITHDRAW_ALL, self.ItemNames) then
+    begin
+      Self.SetBankSlot;
+      BankScreen.Withdraw(self.BankSlot, WITHDRAW_ALL, self.ItemNames);
+    end;
+
+    PostAction();
+
+    RSW.WalkPath(self.BankPath.Reversed);
+    AntiBan();
+
+    Self.HandleDoor();
+  end else
+  begin
+    WriteLn('Terminating: Failed to open bank');
+    //Logout.ClickLogout();
+    TerminateScript;
+  end;
+end;
+
+procedure TCooker.Init();
+begin
+  self.Spots    := [[4118, 2469], [4126, 2462]];
+  self.BankPath := [[4126, 2461], [4163, 2484], [4185, 2492]];
+  self.Offset   := [0,0,0];
+
+  self.PlayerBox := Minimap.VecToMsRect(Vec3(MM2MS.MMCX,MM2MS.MMCY,2)).Expand(7).Bounds;
+  self.BankPath  := RSWUtils.BuildPath(self.BankPath, 8);
+
+  self.HoverSkill := SKILL_COOKING;
+  self.ItemNames  := ['Raw shrimps', 'Raw anchovies', 'Raw sardine', 'Raw herring'];
+  self.BankSlot   := -1;
+
+  self.DeclarePlayers();
+  Players.GetCurrent()^.Login();
+  mainscreen.SetAngle(True);
+end;
+
+
+var
+  trips: Int32;
+begin
+  smart.EnableDrawing := True;
+  srl.Setup([]);
+
+  RSW.Init('world.png');
+  RSW.skipClose := 25;
+  RSW.walkStyle := wsSPS;
+  AddOnTerminate(@RSW.Free);
+
+  bot.Init();
+  WriteLn('>>> Initialized');
+
+  while SRL.isLoggedIn() do
+  begin
+    bot.DoBanking();
+    bot.DoWork();
+    bot.AntiBan();
+  end;
+end.
