@@ -448,7 +448,7 @@ begin
   self.PlayerBox := Minimap.VecToMsRect(Vec3(MM2MS.MMCX,MM2MS.MMCY,2)).Expand(7).Bounds;
   self.DeclarePlayers();
 
-  Mouse.Speed := 17;
+  Mouse.Speed := 10;
   Players.GetCurrent()^.Login();
   mainscreen.SetAngle(True);
   minimap.SetCompassAngle(0);
