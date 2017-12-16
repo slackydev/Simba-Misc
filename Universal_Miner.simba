@@ -1,0 +1,808 @@
+program Universal_Miner_B001;
+{$DEFINE SMART}
+{$H-}
+{$I SRL/OSR.simba}
+{$I RSWalker/Walker.simba}
+(*
+  Universal™ Miner
+
+  Steps to use:
+    1. For longer runs you need to declare login details [LINE 164]
+    2. Start the script at your mining site.
+*)
+
+
+type
+  TOffsetVec = record Height, X, Y: Single; end;
+
+  TStatistics = record
+    Trips: Int32;
+    OreCount: Int32;
+  end;
+
+  TMiner = record
+    PlayerBox: TBox;
+
+    RockSpots: TPointArray;
+    RockColors: array of TCTS2Color;
+
+    BankSpots: TPointArray;
+    BankColors: array of TCTS2Color;
+
+    BankPath: TPointArray;
+
+    BotStats: TStatistics;
+
+    __RndCalls: Int32;
+  end;
+
+
+var
+  Bot: TMiner;
+  RSW: TRSWalker;
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// WIN API stuff
+
+
+const WINAPI_CC  = {$IFDEF CPU386}' stdcall'{$ELSE}' win64'{$ENDIF};
+const ffi_winapi = {$IFDEF CPU386}ffi_stdcall{$ELSE}ffi_win64{$ENDIF};
+
+type
+  _EnumWindowsProc = function(wnd:DWORD; Param:Pointer): LongBool;
+  TEnumWindowsProc = native(_EnumWindowsProc, ffi_winapi);
+
+function GetAsyncKeyState(vKey: Int32): Int16; external 'GetAsyncKeyState@user32.dll' + WINAPI_CC;
+function GetForegroundWindow(): PtrUInt; external 'GetForegroundWindow@user32.dll' + WINAPI_CC;
+function GetWindowThreadProcessId(wnd: PtrUInt; out dwProcessId: DWORD): DWORD; external 'GetWindowThreadProcessId@user32.dll' + WINAPI_CC;
+function EnumChildWindows(hWndParent: DWORD; func: TEnumWindowsProc; Param: Pointer): LongBool; external 'EnumChildWindows@user32.dll' + WINAPI_CC;
+
+function GetKeyDown(): Char;
+var
+  key: Word;
+  keys: array of Word;
+begin
+  keys := [VK_A..VK_Z];
+  keys += [VK_0..VK_9];
+  keys += [VK_OEM_PERIOD, VK_OEM_MINUS];
+  for Key in keys do
+    if GetAsyncKeyState(key) and $8000 <> 0 then
+    begin
+      while GetAsyncKeyState(key) and $8000 <> 0 do Wait(10);
+      if key = VK_OEM_PERIOD then key := Ord('.');
+      if key = VK_OEM_MINUS  then key := Ord('-');
+      Exit(Char(key));
+    end;
+end;
+
+function IsKeyDown2(vKey: Word): Boolean;
+begin
+  Result := GetAsyncKeyState(vKey) and $8000 <> 0;
+end;
+
+function HasFocus(PID: PtrUInt): Boolean;
+var tmp: DWORD;
+begin
+  GetWindowThreadProcessId(GetForegroundWindow(), tmp);
+  Result := tmp = PID;
+end;
+
+function GetRSAppletWnd(PID: DWORD): DWORD;
+  function GetLastChild(Handle: DWORD; Param: Pointer): LongBool; static;
+  begin
+    DWORD(Param^) := handle;
+    Result := True;
+  end;
+var
+  p: TSysProc;
+  client: DWORD;
+begin
+  for p in GetProcesses() do
+    if p.Pid = PID then
+      Break;
+  EnumChildWindows(p.Handle, @GetLastChild, @Result);
+end;
+
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// utility functions
+function StrToTPA(s:String): TPointArray;
+var
+  i: Int32;
+  Arr: TExtArray;
+begin
+  Arr := s.ExtractNumbers();
+  SetLength(Result, Length(Arr) div 2);
+  for i:=0 to High(Result) do
+  begin
+    Result[i].x := Trunc(Arr[i*2]);
+    Result[i].y := Trunc(Arr[i*2+1]);
+  end;
+end;
+
+function StrToCTS2(s:String): array of TCTS2Color;
+var
+  i: Int32;
+  Arr: TExtArray;
+begin
+  Arr := s.ExtractNumbers();
+  SetLength(Result, Length(Arr) div 4);
+  for i:=0 to High(Result) do
+  begin
+    Result[i].Color     := Trunc(Arr[i*4]);
+    Result[i].Tolerance := Trunc(Arr[i*4+1]);
+    Result[i].HueMod    := Arr[i*4+2];
+    Result[i].SatMod    := Arr[i*4+3];
+  end;
+end;
+
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// misc bot func
+
+function WorldToMSTile(Me, ObjLoc: TPoint; Height:Double=0; Offx,Offy:Double=0): TRectangle;
+var
+  Angle: Double;
+begin
+  ObjLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (ObjLoc - Me);
+  Angle  := minimap.GetCompassAngle(False);
+  ObjLoc := ObjLoc.Rotate(Angle, Point(MM2MS.MMCX, MM2MS.MMCY));
+  Result := Minimap.VecToMSRect(Vec3(ObjLoc.x - offx, ObjLoc.y - offy, Height), Angle);
+end;
+
+procedure MouseOffClient(direction: Byte);
+var
+  i,W,H: Int32;
+  pt: TPoint;
+begin
+  GetClientDimensions(W, H);
+  pt := Mouse.GetPosition();
+  if (pt.X < 0) or (pt.X > W) or (pt.Y < 0) or (pt.Y > H) then
+    Exit();
+  if (direction >= 4) then
+    direction := Random(0,3);
+  case direction of
+    0: Mouse.Move(Box(-300, -300, W, 0)); // top
+    1: Mouse.Move(Box(0, H, W, H+300));   // bottom
+    2: Mouse.Move(Box(-300, 0, 0, H));    // left
+    3: Mouse.Move(Box(W, 0, W+300, H));   // right
+  end;
+end;
+
+
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Miner
+
+procedure TMiner.DeclarePlayers();
+begin
+  with Players.New()^ do
+  begin
+    LoginName := '';
+    Password  := '';
+    IsActive  := True;
+    IsMember  := False;
+    World     := 384;
+  end;
+  Players.SetCurrent(0);
+end;
+
+
+procedure TMiner.AntiBan();
+var
+  CPH: Double;
+  PauseLen: Int32;
+  Counter: TCountDown;
+begin
+  Inc(__RndCalls);
+  CPH := Max(1, __RndCalls / (GetTimeRunning() / (1000*60*60)));
+  case Random(round(CPH) * 24) of
+    0..72: {3 per hour}
+      begin
+        WriteLn('[RND] Check skill stats');
+        Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000), Random(0,4) > 1);
+      end;
+
+    73..85: {1 per hour}
+      begin
+        WriteLn('[RND] Check overall stats');
+        Stats.Open();
+        WaitEx(5000,500);
+        Inventory.Open();
+      end;
+
+    86..98: {1 per hour}
+      begin
+        WriteLn('[RND] Taking a breather');
+        if Random(2)=0 then MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
+        WaitEx(65000,10000);
+
+        if not(srl.isLoggedIn()) then
+          Players.GetCurrent()^.Login();
+
+        Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000));
+      end;
+
+    100..105: {every two hours}
+      begin
+        WriteLn('[RND] Doing misc stuff');
+        if Random(2) = 0 then
+          Gametabs.Open(tabFriends);
+
+        WaitEx(3000,500);
+        if Random(0, 9) = 0 then
+        begin
+          if Random(2)=0 then MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
+          WaitEx(30000,2500);
+        end;
+
+        if Random(0, 9) > 3 then
+        begin
+          Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000), Random(0,4) > 1);
+          WaitEx(2000,500);
+        end;
+      end;
+
+    110..113: {every four hours}
+      begin
+        PauseLen := Trunc(srl.GaussRand(1000*60*35, 1000*60*5));
+        WriteLn('[RND] Pausing for ', SRL.MsToTime(PauseLen, Time_Formal));
+
+        Logout.Open();            WaitEx(700,90);
+        Logout.ClickLogout();     WaitEx(700,90);
+
+        MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
+
+        repeat
+          Wait(Max(PauseLen, 1000*60*5));
+          PauseLen -= 1000*60*5;
+          WriteLn('[RND] ', SRL.MsToTime(PauseLen, Time_Formal), ' remaining of the break');
+        until PauseLen < 0;
+
+        if not(srl.isLoggedIn()) then
+          Players.GetCurrent()^.Login();
+      end;
+  end;
+end;
+
+procedure TMiner.PostAction(DoAntiban: Boolean = True);
+begin
+  WaitEx(500,70);
+  if DoAntiban then AntiBan;
+end;
+
+function TMiner.Contains(R: TRectangle; Colors: array of TCTS2Color): Boolean;
+var
+  TPA: TPointArray;
+  i, count: Int32;
+begin
+  for i:=0 to High(Colors) do
+  begin
+    count += srl.FindColors(TPA, Colors[i], R.Bounds);
+    if count > 150 then
+      Exit(True);
+  end;
+end;
+
+function TMiner.Find(Locations: TPointArray): TRectArray;
+var
+  i: Int32;
+  me: TPoint;
+  rect: TRectangle;
+begin
+  me := RSW.GetMyPos();
+  for i:=0 to High(Locations) do
+  begin
+    rect := WorldToMSTile(me, Locations[i], 0,0,0).Expand(-2);
+    if MainScreen.GetBounds.Contains(rect.Bounds) then
+      Result += rect;
+  end;
+end;
+
+
+function TMiner.DoWork(): Boolean;
+var
+  i,next: Int32;
+  T: TCountDown;
+  TRA: TRectArray;
+begin
+  TRA := Find(self.RockSpots);
+  for i:=0 to High(TRA) do
+  begin
+    if not Contains(TRA[i], Self.RockColors) then
+      Continue;
+
+    mouse.Move(TRA[i].Mean, Round(TRA[i].Radius));
+    if not Mainscreen.IsUpText(['Mine', 'Rocks']) then Continue;
+    WaitEx(60,8);
+    if not Mouse.Click(ctRed) then Exit;
+    PostAction;
+
+    while Minimap.isPlayerMoving() do Wait(65);
+
+    TRA := Find(self.RockSpots); // update the TRA, it will have the same order still.
+    smart.Image.DrawTPA(TRA[i].ToTPA.Connect, $00FF00);
+
+    next := (i+1) mod Length(TRA);
+    mouse.Move(TRA[next].Mean, Round(TRA[next].Radius));
+
+    T.Init(srl.NormalRange(8500,12000));
+    while (not T.IsFinished) and Contains(TRA[i], Self.RockColors) do
+    begin
+      Chatbox.HandleLevelUp();
+      AntiBan;
+      Wait(10);
+    end;
+    Exit(True);
+  end;
+end;
+
+
+procedure TMiner.DoBanking();
+
+  function OpenBank(): Boolean;
+  var
+    TRA: array of TRectangle;
+    i: Int32;
+  begin
+    for 0 to 3 do
+    begin
+      TRA := Find(self.BankSpots);
+      for i:=0 to High(TRA) do
+      begin
+        if not Contains(TRA[i], Self.BankColors) then
+          Continue;
+
+        if BankScreen.OpenAt(srl.RandomPoint(TRA[i].Mean, Trunc(TRA[i].Radius))) then
+          Exit(True);
+      end;
+      Wait(800,1300);
+    end;
+  end;
+
+  procedure DoInventory();
+  var
+    slots: TIntArray;
+  begin
+    slots := Inventory.GetUsedSlots();
+    slots.Del(0,1); //reserved
+    while Length(slots) > 0 do
+    begin
+      Inventory.MouseSlot(slots[0]);
+      ChooseOption.Select(['Deposit-All']);
+      while Inventory.IsSlotUsed(slots[0]) do WaitEx(90,10);
+      slots := Inventory.GetUsedSlots();
+      slots.Del(0,2);
+    end;
+  end;
+
+begin
+  if not RSW.WalkPath(self.BankPath) then
+  begin
+    WriteLn('Terminating: Failed to walk path [1]');
+    TerminateScript;
+  end;
+  AntiBan;
+
+  if not OpenBank() then
+  begin
+    WriteLn('Terminating: Failed to open bank');
+    TerminateScript;
+  end;
+
+  PostAction(False);
+  DoInventory();
+  PostAction;
+
+  if not RSW.WalkPath(self.BankPath.Reversed) then
+  begin
+    WriteLn('Terminating: Failed to walk path [2]');
+    TerminateScript;
+  end;
+  AntiBan;
+end;
+
+
+procedure TMiner.Run();
+var
+  loc: TPoint;
+begin
+  loc := RSW.GetMyPos();
+  if (Distance(loc, self.BankPath[high(self.BankPath)]) < Distance(loc, self.BankPath[0])) and
+     (not RSW.WalkPath(self.BankPath.Reversed)) then
+  begin
+    WriteLn('Terminating: Failed to walk from bank');
+    TerminateScript;
+  end;
+
+  while SRL.IsLoggedIn do
+  begin
+    if Inventory.IsFull then
+    begin
+      smart.Image.Clear();
+      Self.DoBanking;
+      Inc(BotStats.Trips);
+    end;
+
+    smart.Image.Clear();
+    smart.Image.DrawBox(Self.PlayerBox, False, $666666);
+    if Self.DoWork() then
+    begin
+      ClearDebug();
+      WriteLn('Trips  : ', BotStats.Trips);
+      WriteLn('Runtime: ', SRL.MsToTime(GetTimeRunning, Time_Formal));
+      Self.AntiBan;
+    end;
+  end;
+end;
+
+
+procedure TMiner.Init();
+begin
+  self.PlayerBox := Minimap.VecToMsRect(Vec3(MM2MS.MMCX,MM2MS.MMCY,2)).Expand(7).Bounds;
+  self.DeclarePlayers();
+  Players.GetCurrent()^.Login();
+  mainscreen.SetAngle(True);
+  minimap.SetCompassAngle(0);
+end;
+
+
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Crazy config generation
+
+procedure TMiner.Setup();
+var
+  r: String;
+  DefaultBox: TBox = [70,40, 420,140];
+  client2: TClient;
+
+  function SlowMSToMM(MS: TPoint): TPoint;
+  var
+    x,y: Int32;
+    best,test: TPoint;
+  begin
+    for x:=MM2MS.MMCX-52 to MM2MS.MMCX+52 do
+      for y:=MM2MS.MMCY-52 to MM2MS.MMCY+52 do
+      begin
+        test := Minimap.PointToMs([x,y],0);
+        if Distance(test, MS) < Distance(best, MS) then
+        begin
+          best := test;
+          Result := Point(x,y);
+        end;
+      end;
+  end;
+
+  procedure WaitReleaseKey();
+  begin
+    while client2.GetIOManager.IsMouseButtonDown(0) do Wait(10);
+  end;
+
+  function GetClick(out p: TPoint): Boolean;
+  begin
+    if not HasFocus(smart.PID) then Exit();
+    if client2.GetIOManager.IsMouseButtonDown(0) then
+    begin
+      client2.GetIOManager.GetMousePos(p.x,p.y);
+      Result := p.InBox(GetClientBounds);
+      WaitReleaseKey();
+    end;
+  end;
+
+  function Query(Text: String; Alts:TStringArray; Area:TBox=[]): string;
+  var
+    i: Int32;
+    p: TPoint;
+    TPA: TPointArray;
+    ATPA: T2DPointArray;
+    B: TBox;
+    Buttons: TBoxArray;
+    xloc,CX,CY,CurrWidth: Int32;
+  begin
+    if (Area.x1 = Area.x2) then
+      Area := chatbox.GetBounds;
+
+    CX := Area.x1;
+    CY := Area.y1;
+
+    // query
+    smart.Image.DrawBox(Area.ExpandFunc(-0), False, 1648179);
+    smart.Image.DrawBox(Area.ExpandFunc(-1), False, 4214871);
+    smart.Image.DrawBox(Area.ExpandFunc(-2), True,  8758968);
+    TPA := TPAFromText(Text, 'UpChars07');
+    B := GetTPABounds(TPA);
+    xloc := (B.Width + Area.Width) div 2 - B.Width;
+    OffsetTPA(TPA, Point(CX+xloc, CY+20));
+    smart.Image.DrawTPA(TPA, $1);
+
+    // alternatives
+    SetLength(Buttons, Length(alts));
+    SetLength(ATPA, Length(alts));
+    for i:=0 to High(Alts) do
+    begin
+      ATPA[i] := TPAFromText(Alts[i], SmallChars07);
+      ATPA[i].Offset(Point(CurrWidth, 50));
+      Buttons[i] := GetTPABounds(ATPA[i]);
+      CurrWidth := Buttons[i].X2+20;
+    end;
+
+    xloc := (CurrWidth + Area.Width) div 2 - CurrWidth;
+    for i:=0 to High(Alts) do
+    begin
+      Buttons[i].Offset(Point(CX + xloc, CY));
+      ATPA[i].Offset(Point(CX + xloc, CY));
+      smart.Image.DrawBox(Buttons[i].ExpandFunc(8), True, $111111);
+      smart.Image.DrawBox(Buttons[i].ExpandFunc(6), True, 4410968);
+      smart.Image.DrawTPA(ATPA[i], $FFFFFF);
+    end;
+
+    // handling
+    while True do
+    begin
+      if GetClick(p) then
+        for i:=0 to High(Buttons) do
+          if PointInBox(p, Buttons[i]) then
+          begin
+            smart.Image.DrawBox(Area, True, 0);
+            Exit(Alts[i]);
+          end;
+      Wait(1);
+    end;
+  end;
+
+  function QueryStr(Text: String; Area:TBox=[]): string;
+  var
+    i: Int32;
+    chr: Char;
+    TPA: TPointArray;
+    pt,p: TPoint;
+    B, Button: TBox;
+  begin
+    if (Area.x1 = Area.x2) then
+      Area := chatbox.GetBounds;
+
+    // query
+    smart.Image.DrawBox(Area.ExpandFunc(-0), False, 1648179);
+    smart.Image.DrawBox(Area.ExpandFunc(-1), False, 4214871);
+    smart.Image.DrawBox(Area.ExpandFunc(-2), True,  8758968);
+
+    TPA := TPAFromText(Text, 'UpChars07');
+    OffsetTPA(TPA, Point(Area.x1+40, Area.y1+20));
+    smart.Image.DrawTPA(TPA, $1);
+    B := GetTPABounds(TPA);
+
+    // button
+    Button := Box(Area.x1+40, Area.y1+50, Area.x1+80, Area.y1+72);
+    smart.Image.DrawBox(Button.ExpandFunc(-0), True, $111111);
+    smart.Image.DrawBox(Button.ExpandFunc(-2), True, 4410968);
+    smart.Image.DrawText('OK','SmallChars07', Point(Area.x1+54, Area.y1+54), False, $FFFFFF);
+
+
+    // handling
+    pt.x := B.x2+5;
+    pt.y := Area.y1+20;
+    while True do
+    begin
+      while not HasFocus(smart.PID) do Wait(10);
+
+      if GetClick(p) then
+        if PointInBox(p, Button) then
+        begin
+          smart.Image.DrawBox(Area, True, 0);
+          Exit(Result);
+        end;
+
+      chr := GetKeyDown();
+      if chr <> #0 then
+      begin
+        Result += Lowercase(chr);
+        PressKey(VK_BACK);
+        smart.Image.DrawText(Result,'SmallChars07', pt, False, 1);
+      end;
+
+      if IsKeyDown2(VK_BACK) and (Result <> '') then
+      begin
+        TPA := TPAFromText(Result, 'SmallChars07');
+        TPA.Offset(pt);
+        smart.Image.DrawBox(GetTPABounds(TPA), True, 8758968);
+
+        Delete(Result,Length(Result),1);
+        smart.Image.DrawText(Result, 'SmallChars07', pt, False, 1);
+      end;
+    end;
+  end;
+
+  function SetupLocations(): TPointArray;
+  var
+    p, me, worldPt: TPoint;
+    rect: TRectangle;
+  begin
+    me := RSW.GetMyPos();
+
+    while True do
+    begin
+      if GetClick(p) then
+      begin
+        worldPt := (SlowMSToMM(p) - Point(MM2MS.MMCX, MM2MS.MMCY)) + me;
+
+        rect := WorldToMSTile(me, worldPt);
+        if Mainscreen.GetBounds.Contains(rect.Bounds) then
+        begin
+          smart.Image.DrawTPA(rect.ToTPA.Connect, $FFFF);
+          case Query('Are you happy?', ['Add more', 'Retry', 'Done']) of
+            'Retry':    smart.Image.DrawTPA(rect.ToTPA.Connect, 0);
+            'Add more': Result += worldPt;
+            'Done':     begin Result += worldPt; Break; end;
+          end;
+        end;
+      end;
+      Wait(1);
+    end;
+    smart.Image.Clear();
+  end;
+
+  function SetupColors(Locations: TPointArray): array of TCTS2Color;
+  var
+    i: Int32;
+    p,me: TPoint;
+    IsValid: Boolean;
+    R: array of TRectangle;
+    Color: TCTS2Color;
+    TPA: TPointArray;
+
+    function MarkColors(Colors: array of TCTS2Color): TPointArray;
+    var
+      i,j: Int32;
+      TPA: TPointArray;
+    begin
+      for i:=0 to High(Colors) do
+        for j:=0 to High(R) do
+          if srl.FindColors(TPA, Colors[i], R[j].Bounds.ExpandFunc(-1)) then
+          begin
+            TPA := R[j].Filter(TPA);
+            smart.Image.DrawTPA(TPA, $FF);
+            Result += TPA;
+          end;
+    end;
+  begin
+    me := RSW.GetMyPos();
+    SetLength(R, Length(Locations));
+    for i:=0 to High(Locations) do
+    begin
+      R[i] := WorldToMSTile(Me, Locations[i]);
+      smart.Image.DrawTPA(R[i].ToTPA.Connect, $00FF00);
+    end;
+
+    while True do
+    begin
+      if GetClick(p) then
+      begin
+        Color := CTS2(GetColor(p), 13);
+        for i:=0 to High(R) do
+          if R[i].Contains(p) then
+          begin
+            IsValid := True;
+            break;
+          end;
+        if not IsValid then
+          continue;
+
+        TPA := MarkColors(Result + Color);
+        case Query('Are you happy?', ['Add more', 'Retry', 'Reset', 'Done']) of
+          'Retry':    smart.Image.DrawTPA(TPA, 0);
+          'Add more': Result += Color;
+          'Done':     begin Result += Color; Break; end;
+          'Reset':    begin smart.Image.DrawTPA(TPA, 0); Result := []; end;
+        end;
+      end;
+      Wait(1);
+    end;
+    smart.Image.Clear();
+  end;
+
+  function RecordPath(): TPointArray;
+  var
+    worldPt,p: TPoint;
+    t: UInt64;
+  begin
+    t := GetTickCount64()+20000;
+    while True do
+    begin
+      if client2.GetIOManager.IsMouseButtonDown(0) then
+      begin
+        client2.GetIOManager.GetMousePos(p.x,p.y);
+        WaitReleaseKey();
+        worldPt := RSW.GetMyPos();
+        Mouse.Click(p, mouse_Left);
+
+        t := GetTickCount64()+8000;
+        Result += worldPt;
+      end;
+
+      if (GetTickCount64() > t) then
+        case Query('Are we there yet?', ['No', 'Yes']) of
+          'Yes': Exit(Result+RSW.GetMyPos());
+          'No' : t := GetTickCount64()+8000;
+        end;
+      Wait(1);
+    end;
+  end;
+
+  procedure LoadConfig(path: String);
+  begin
+    BankPath   := StrToTPA (ReadINI('settings', 'BankPath',   path));
+    RockSpots  := StrToTPA (ReadINI('settings', 'RockSpots',  path));
+    RockColors := StrToCTS2(ReadINI('settings', 'RockColors', path));
+    BankSpots  := StrToTPA (ReadINI('settings', 'BankSpots',  path));
+    BankColors := StrToCTS2(ReadINI('settings', 'BankColors', path));
+  end;
+
+  procedure StoreConfig(path: String);
+  var
+    f: PtrInt;
+  begin
+    CloseFile(CreateFile(path));
+    f := RewriteFile(path, True);
+    WriteFileString(f, '[settings]'                     + #13#10);
+    WriteFileString(f, 'BankPath   = '+ToStr(BankPath)  + #13#10);
+    WriteFileString(f, 'RockSpots  = '+ToStr(RockSpots) + #13#10);
+    WriteFileString(f, 'RockColors = '+ToStr(RockColors)+ #13#10);
+    WriteFileString(f, 'BankSpots  = '+ToStr(BankSpots) + #13#10);
+    WriteFileString(f, 'BankColors = '+ToStr(BankColors)+ #13#10);
+    CloseFile(f);
+  end;
+
+begin
+  client2.Init(PluginPath);
+  client2.GetIOManager.SetTarget2(GetRSAppletWnd(SMART.PID));
+
+  r := Query('Do you wish to run setup?', ['Yes','No'], DefaultBox);
+  if r = 'No' then
+  begin
+    r := QueryStr('Path to configfile: ', DefaultBox);
+    WriteLn('Loading from config: ', r);
+    LoadConfig(r);
+    client2.Free();
+    Exit();
+  end;
+
+  Query('Click the rocks you wish to mine...', ['OK'], DefaultBox);
+  RockSpots := SetupLocations();
+
+  Query('Click some colors for us to use...', ['OK'], DefaultBox);
+  RockColors := SetupColors(RockSpots);
+
+  Query('Please walk to your bank', ['OK'], DefaultBox);
+  BankPath := RSWUtils.BuildPath(RecordPath(), 8);
+
+  Query('Click valid bankers, or booths...', ['OK'], DefaultBox);
+  BankSpots := SetupLocations();
+
+  Query('Click some colors for us to use...', ['OK'], DefaultBox);
+  BankColors := SetupColors(BankSpots);
+
+  StoreConfig(QueryStr('Store config as: ', DefaultBox));
+  client2.Free();
+end;
+
+
+begin
+  smart.EnableDrawing := True;
+  srl.Setup([]);
+  AddOnTerminate(@smart.Free);
+
+  RSW.Init('world.png');
+  RSW.skipClose := 25;
+  RSW.walkStyle := wsSPS;
+  AddOnTerminate(@RSW.Free);
+
+  Bot.Init();
+  Bot.Setup();
+  Bot.Run();
+end.
