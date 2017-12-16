@@ -4,17 +4,19 @@ program Universal_Miner_B001;
 {$I SRL/OSR.simba}
 {$I RSWalker/Walker.simba}
 (*
-  Universal™ Miner
+  Universal Miner ™
 
   Steps to use:
-    1. For longer runs you need to declare login details [LINE 164]
-    2. Start the script at your mining site.
+    1. For longer runs you need to declare login details bellow
+    2. Start the script at your mining site, and run setup.
 *)
+const
+  LOGIN_NAME = '????????';
+  LOGIN_PASS = '********';
+  RS_WORLD   = 384;
 
 
 type
-  TOffsetVec = record Height, X, Y: Single; end;
-
   TStatistics = record
     Trips: Int32;
     OreCount: Int32;
@@ -141,7 +143,7 @@ end;
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
-// misc bot func
+// MISC BOT FUNCTIONS
 
 function WorldToMSTile(Me, ObjLoc: TPoint; Height:Double=0; Offx,Offy:Double=0): TRectangle;
 var
@@ -176,17 +178,17 @@ end;
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
-// Miner
+// MINER
 
 procedure TMiner.DeclarePlayers();
 begin
   with Players.New()^ do
   begin
-    LoginName := '';
-    Password  := '';
+    LoginName := LOGIN_NAME;
+    Password  := LOGIN_PASS;
     IsActive  := True;
     IsMember  := False;
-    World     := 384;
+    World     := RS_WORLD;
   end;
   Players.SetCurrent(0);
 end;
@@ -219,7 +221,7 @@ begin
       begin
         WriteLn('[RND] Taking a breather');
         if Random(2)=0 then MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
-        WaitEx(65000,10000);
+        WaitEx(45000,3000);
 
         if not(srl.isLoggedIn()) then
           Players.GetCurrent()^.Login();
@@ -445,6 +447,8 @@ procedure TMiner.Init();
 begin
   self.PlayerBox := Minimap.VecToMsRect(Vec3(MM2MS.MMCX,MM2MS.MMCY,2)).Expand(7).Bounds;
   self.DeclarePlayers();
+
+  Mouse.Speed := 17;
   Players.GetCurrent()^.Login();
   mainscreen.SetAngle(True);
   minimap.SetCompassAngle(0);
@@ -459,8 +463,14 @@ end;
 procedure TMiner.Setup();
 var
   r: String;
-  DefaultBox: TBox = [70,40, 420,140];
+  DefaultBox: TBox = [75,40, 425,140];
   client2: TClient;
+
+type
+  TButtonBox = record
+    TextTPA: TPointArray;
+    Bounds: TBox;
+  end;
 
   function SlowMSToMM(MS: TPoint): TPoint;
   var
@@ -495,15 +505,29 @@ var
     end;
   end;
 
+  function GetButton(txt: String): TButtonBox;
+  begin
+    Result.TextTPA := TPAFromText(txt, SmallChars07);
+    Result.Bounds  := GetTPABounds(Result.TextTPA).ExpandFunc(8);
+  end;
+
+  function DrawButton(p: TPoint; var Button: TButtonBox): TButtonBox;
+  begin
+    Button.TextTPA.Offset(p);
+    Button.Bounds.Offset(p);
+    smart.Image.DrawBox(Button.Bounds, True, $111111);
+    smart.Image.DrawBox(Button.Bounds.ExpandFunc(-2), True, 4410968);
+    smart.Image.DrawTPA(Button.TextTPA, $FFFFFF);
+  end;
+
   function Query(Text: String; Alts:TStringArray; Area:TBox=[]): string;
   var
-    i: Int32;
+    i,xstart,CX,CY,CurrWidth: Int32;
     p: TPoint;
     TPA: TPointArray;
-    ATPA: T2DPointArray;
     B: TBox;
-    Buttons: TBoxArray;
-    xloc,CX,CY,CurrWidth: Int32;
+    Buttons: array of TButtonBox;
+    xOffset: TIntArray;
   begin
     if (Area.x1 = Area.x2) then
       Area := chatbox.GetBounds;
@@ -517,37 +541,28 @@ var
     smart.Image.DrawBox(Area.ExpandFunc(-2), True,  8758968);
     TPA := TPAFromText(Text, 'UpChars07');
     B := GetTPABounds(TPA);
-    xloc := (B.Width + Area.Width) div 2 - B.Width;
-    OffsetTPA(TPA, Point(CX+xloc, CY+20));
+    xstart := (B.Width + Area.Width) div 2 - B.Width;
+    OffsetTPA(TPA, Point(CX+xstart, CY+20));
     smart.Image.DrawTPA(TPA, $1);
 
-    // alternatives
-    SetLength(Buttons, Length(alts));
-    SetLength(ATPA, Length(alts));
-    for i:=0 to High(Alts) do
+    // buttons
+    for i:=0 to High(alts) do
     begin
-      ATPA[i] := TPAFromText(Alts[i], SmallChars07);
-      ATPA[i].Offset(Point(CurrWidth, 50));
-      Buttons[i] := GetTPABounds(ATPA[i]);
-      CurrWidth := Buttons[i].X2+20;
+      Buttons   += GetButton(alts[i]);
+      xOffset   += CurrWidth;
+      CurrWidth += Buttons[i].Bounds.X2+20;
     end;
 
-    xloc := (CurrWidth + Area.Width) div 2 - CurrWidth;
-    for i:=0 to High(Alts) do
-    begin
-      Buttons[i].Offset(Point(CX + xloc, CY));
-      ATPA[i].Offset(Point(CX + xloc, CY));
-      smart.Image.DrawBox(Buttons[i].ExpandFunc(8), True, $111111);
-      smart.Image.DrawBox(Buttons[i].ExpandFunc(6), True, 4410968);
-      smart.Image.DrawTPA(ATPA[i], $FFFFFF);
-    end;
+    xstart := (CurrWidth + Area.Width) div 2 - CurrWidth;
+    for i:=0 to High(Buttons) do
+      DrawButton(Point(CX+xstart+xOffset[i], CY+50), Buttons[i]);
 
     // handling
     while True do
     begin
       if GetClick(p) then
         for i:=0 to High(Buttons) do
-          if PointInBox(p, Buttons[i]) then
+          if PointInBox(p, Buttons[i].Bounds) then
           begin
             smart.Image.DrawBox(Area, True, 0);
             Exit(Alts[i]);
@@ -559,10 +574,11 @@ var
   function QueryStr(Text: String; Area:TBox=[]): string;
   var
     i: Int32;
+    pt, p: TPoint;
     chr: Char;
+    B: TBox;
     TPA: TPointArray;
-    pt,p: TPoint;
-    B, Button: TBox;
+    Button: TButtonBox;
   begin
     if (Area.x1 = Area.x2) then
       Area := chatbox.GetBounds;
@@ -578,10 +594,8 @@ var
     B := GetTPABounds(TPA);
 
     // button
-    Button := Box(Area.x1+40, Area.y1+50, Area.x1+80, Area.y1+72);
-    smart.Image.DrawBox(Button.ExpandFunc(-0), True, $111111);
-    smart.Image.DrawBox(Button.ExpandFunc(-2), True, 4410968);
-    smart.Image.DrawText('OK','SmallChars07', Point(Area.x1+54, Area.y1+54), False, $FFFFFF);
+    Button := GetButton('OK');
+    DrawButton(Point(Area.x1+40, Area.y1+50), Button);
 
 
     // handling
@@ -592,7 +606,7 @@ var
       while not HasFocus(smart.PID) do Wait(10);
 
       if GetClick(p) then
-        if PointInBox(p, Button) then
+        if PointInBox(p, Button.Bounds) then
         begin
           smart.Image.DrawBox(Area, True, 0);
           Exit(Result);
@@ -612,7 +626,7 @@ var
         TPA.Offset(pt);
         smart.Image.DrawBox(GetTPABounds(TPA), True, 8758968);
 
-        Delete(Result,Length(Result),1);
+        SetLength(Result, Length(Result)-1);
         smart.Image.DrawText(Result, 'SmallChars07', pt, False, 1);
       end;
     end;
@@ -635,10 +649,10 @@ var
         if Mainscreen.GetBounds.Contains(rect.Bounds) then
         begin
           smart.Image.DrawTPA(rect.ToTPA.Connect, $FFFF);
-          case Query('Are you happy?', ['Add more', 'Retry', 'Done']) of
+          case Query('Are you happy?', ['Add more', 'Retry', 'Yes']) of
             'Retry':    smart.Image.DrawTPA(rect.ToTPA.Connect, 0);
             'Add more': Result += worldPt;
-            'Done':     begin Result += worldPt; Break; end;
+            'Yes':      begin Result += worldPt; Break; end;
           end;
         end;
       end;
@@ -690,14 +704,14 @@ var
             IsValid := True;
             break;
           end;
-        if not IsValid then
+        if(not IsValid) then
           continue;
 
         TPA := MarkColors(Result + Color);
-        case Query('Are you happy?', ['Add more', 'Retry', 'Reset', 'Done']) of
+        case Query('Are you happy?', ['Add more', 'Retry', 'Reset', 'Yes']) of
           'Retry':    smart.Image.DrawTPA(TPA, 0);
           'Add more': Result += Color;
-          'Done':     begin Result += Color; Break; end;
+          'Yes':      begin Result += Color; Break; end;
           'Reset':    begin smart.Image.DrawTPA(TPA, 0); Result := []; end;
         end;
       end;
@@ -711,24 +725,22 @@ var
     worldPt,p: TPoint;
     t: UInt64;
   begin
-    t := GetTickCount64()+20000;
+    t := GetTickCount()+8000;
     while True do
     begin
-      if client2.GetIOManager.IsMouseButtonDown(0) then
+      if GetClick(p) then
       begin
-        client2.GetIOManager.GetMousePos(p.x,p.y);
-        WaitReleaseKey();
+        t := GetTickCount()+2500;
         worldPt := RSW.GetMyPos();
         Mouse.Click(p, mouse_Left);
 
-        t := GetTickCount64()+8000;
         Result += worldPt;
       end;
 
-      if (GetTickCount64() > t) then
+      if (GetTickCount() > t) and (not Minimap.isPlayerMoving()) then
         case Query('Are we there yet?', ['No', 'Yes']) of
           'Yes': Exit(Result+RSW.GetMyPos());
-          'No' : t := GetTickCount64()+8000;
+          'No' : t := GetTickCount()+2500;
         end;
       Wait(1);
     end;
