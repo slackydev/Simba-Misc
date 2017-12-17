@@ -1,20 +1,23 @@
-program Universal_Miner_B001;
+program Universal_Miner_V003;
 {$DEFINE SMART}
-{$H-}
 {$I SRL/OSR.simba}
 {$I RSWalker/Walker.simba}
-(*
-  Universal Miner ™
-
-  Steps to use:
-    1. For longer runs you need to declare login details bellow
-    2. Start the script at your mining site, and run setup.
-*)
+{$H-}{$R+}{$X+}
+{==============================================================================]
+| Universal Miner ™
+|
+| Steps to use:
+|   1. For longer runs you need to declare login details bellow
+|   2. Start the script at your mining site, and run setup.
+[==============================================================================}
 const
-  LOGIN_NAME = '????????';
-  LOGIN_PASS = '********';
-  RS_WORLD   = 384;
+  LOGIN_NAME  = '????????';
+  LOGIN_PASS  = '********';
+  RS_WORLD    = 384;
 
+  CONFIG_PATH = IncludePath+'Universal_Miner/';
+  CONFIG_FILE = 'config.cfg';
+  CONFIG_MAP  = 'map.png';
 
 type
   TStatistics = record
@@ -24,6 +27,7 @@ type
 
   TMiner = record
     PlayerBox: TBox;
+    ConfigPath: String;
 
     RockSpots: TPointArray;
     RockColors: array of TCTS2Color;
@@ -42,6 +46,7 @@ type
 var
   Bot: TMiner;
   RSW: TRSWalker;
+
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -194,6 +199,11 @@ begin
 end;
 
 
+function TMiner.HasBanking(): Boolean;
+begin
+  Result := (Self.BankColors <> []) and (Self.BankPath <> []) and (Self.BankSpots <> []);
+end;
+
 procedure TMiner.AntiBan();
 var
   CPH: Double;
@@ -345,7 +355,6 @@ end;
 
 
 procedure TMiner.DoBanking();
-
   function OpenBank(): Boolean;
   var
     TRA: array of TRectangle;
@@ -366,7 +375,7 @@ procedure TMiner.DoBanking();
     end;
   end;
 
-  procedure DoInventory();
+  procedure BankInventory();
   var
     slots: TIntArray;
   begin
@@ -397,7 +406,7 @@ begin
   end;
 
   PostAction(False);
-  DoInventory();
+  BankInventory();
   PostAction;
 
   if not RSW.WalkPath(self.BankPath.Reversed) then
@@ -409,16 +418,25 @@ begin
 end;
 
 
+procedure TMiner.DropInventory();
+begin
+  Inventory.DropItemsExcept([0], Inventory.ErrorPattern);
+end;
+
+
 procedure TMiner.Run();
 var
   loc: TPoint;
 begin
-  loc := RSW.GetMyPos();
-  if (Distance(loc, self.BankPath[high(self.BankPath)]) < Distance(loc, self.BankPath[0])) and
-     (not RSW.WalkPath(self.BankPath.Reversed)) then
+  if Self.HasBanking() then
   begin
-    WriteLn('Terminating: Failed to walk from bank');
-    TerminateScript;
+    loc := RSW.GetMyPos();
+    if (Distance(loc, self.BankPath[high(self.BankPath)]) < Distance(loc, self.BankPath[0])) and
+       (not RSW.WalkPath(self.BankPath.Reversed)) then
+    begin
+      WriteLn('Terminating: Failed to walk from bank');
+      TerminateScript;
+    end;
   end;
 
   while SRL.IsLoggedIn do
@@ -426,7 +444,8 @@ begin
     if Inventory.IsFull then
     begin
       smart.Image.Clear();
-      Self.DoBanking;
+      if HasBanking then Self.DoBanking()
+      else               Self.DropInventory();
       Inc(BotStats.Trips);
     end;
 
@@ -520,42 +539,46 @@ type
     smart.Image.DrawTPA(Button.TextTPA, $FFFFFF);
   end;
 
-  function Query(Text: String; Alts:TStringArray; Area:TBox=[]): string;
+  function MessageBox(Text: String; Area:TBox=[]): string;
   var
-    i,xstart,CX,CY,CurrWidth: Int32;
-    p: TPoint;
+    xstart: Int32;
     TPA: TPointArray;
-    B: TBox;
-    Buttons: array of TButtonBox;
-    xOffset: TIntArray;
+    box: TBox;
   begin
-    if (Area.x1 = Area.x2) then
-      Area := chatbox.GetBounds;
-
-    CX := Area.x1;
-    CY := Area.y1;
-
-    // query
+    if (Area.x1 = Area.x2) then Area := chatbox.GetBounds;
     smart.Image.DrawBox(Area.ExpandFunc(-0), False, 1648179);
     smart.Image.DrawBox(Area.ExpandFunc(-1), False, 4214871);
     smart.Image.DrawBox(Area.ExpandFunc(-2), True,  8758968);
     TPA := TPAFromText(Text, 'UpChars07');
-    B := GetTPABounds(TPA);
-    xstart := (B.Width + Area.Width) div 2 - B.Width;
-    OffsetTPA(TPA, Point(CX+xstart, CY+20));
+    box := GetTPABounds(TPA);
+    xstart := (box.Width + Area.Width) div 2 - box.Width;
+    OffsetTPA(TPA, Point(Area.x1+xstart, Area.y1+20));
     smart.Image.DrawTPA(TPA, $1);
+  end;
+
+  function Query(Text: String; Alts:TStringArray; Area:TBox=[]): string;
+  var
+    i,xstart,CurrWidth: Int32;
+    p: TPoint;
+    Buttons: array of TButtonBox;
+    xOffset: TIntArray;
+  begin
+    if (Area.x1 = Area.x2) then Area := chatbox.GetBounds;
+
+    // query
+    MessageBox(Text, Area);
 
     // buttons
-    for i:=0 to High(alts) do
+    for i:=0 to High(Alts) do
     begin
-      Buttons   += GetButton(alts[i]);
+      Buttons   += GetButton(Alts[i]);
       xOffset   += CurrWidth;
       CurrWidth += Buttons[i].Bounds.X2+20;
     end;
 
     xstart := (CurrWidth + Area.Width) div 2 - CurrWidth;
     for i:=0 to High(Buttons) do
-      DrawButton(Point(CX+xstart+xOffset[i], CY+50), Buttons[i]);
+      DrawButton(Point(Area.x1+xstart+xOffset[i], Area.y1+50), Buttons[i]);
 
     // handling
     while True do
@@ -595,7 +618,7 @@ type
 
     // button
     Button := GetButton('OK');
-    DrawButton(Point(Area.x1+40, Area.y1+50), Button);
+    DrawButton(Point(Area.x1+48, Area.y1+50), Button);
 
 
     // handling
@@ -746,21 +769,60 @@ type
     end;
   end;
 
-  procedure LoadConfig(path: String);
+  procedure GenerateMap(MapPath:String; Pad:Int32=140);
+  var
+    pt,sz: TPoint;
+    map,slice: TMufasaBitmap;
+    TPA: TPointArray;
+    B: TBox;
   begin
-    BankPath   := StrToTPA (ReadINI('settings', 'BankPath',   path));
-    RockSpots  := StrToTPA (ReadINI('settings', 'RockSpots',  path));
-    RockColors := StrToCTS2(ReadINI('settings', 'RockColors', path));
-    BankSpots  := StrToTPA (ReadINI('settings', 'BankSpots',  path));
-    BankColors := StrToCTS2(ReadINI('settings', 'BankColors', path));
+    TPA := Self.BankPath + Self.RockSpots + Self.BankSpots;
+
+    sz := Point(High(RSW.worldMap[0]),High(RSW.worldMap));
+    B := TPA.Bounds.ExpandFunc(Pad);
+    B.LimitTo(Box(0,0,sz.x,sz.y));
+
+    map.Init(client.GetMBitmaps);
+    map.SetSize(B.Width, B.Height);
+    for pt in TPA do
+    begin
+      slice.Init(client.GetMBitmaps);
+      slice.DrawMatrix(w_GetArea(RSW.worldMap, Max(0,pt.x-Pad), Max(0,pt.y-Pad), Min(sz.x,pt.x+Pad), Min(sz.y,pt.y+Pad)));
+      slice.DrawTransparent(pt.x-B.x1-Pad,pt.y-B.y1-Pad, map);
+      slice.Free();
+    end;
+    map.SaveToFile(MapPath);
+    map.Free();
+
+    Self.BankPath.Offset ([-B.x1,-B.y1]);
+    Self.RockSpots.Offset([-B.x1,-B.y1]);
+    Self.BankSpots.Offset([-B.x1,-B.y1]);
   end;
 
-  procedure StoreConfig(path: String);
+  function LoadConfig(): Boolean;
+  begin
+    if not FileExists(ConfigPath+CONFIG_FILE) then
+      Exit(False);
+
+    BankPath   := StrToTPA (ReadINI('settings', 'BankPath',   ConfigPath+CONFIG_FILE));
+    RockSpots  := StrToTPA (ReadINI('settings', 'RockSpots',  ConfigPath+CONFIG_FILE));
+    RockColors := StrToCTS2(ReadINI('settings', 'RockColors', ConfigPath+CONFIG_FILE));
+    BankSpots  := StrToTPA (ReadINI('settings', 'BankSpots',  ConfigPath+CONFIG_FILE));
+    BankColors := StrToCTS2(ReadINI('settings', 'BankColors', ConfigPath+CONFIG_FILE));
+    Result := True;
+  end;
+
+  procedure SaveConfig();
   var
     f: PtrInt;
   begin
-    CloseFile(CreateFile(path));
-    f := RewriteFile(path, True);
+    CreateDirectory(CONFIG_PATH);
+    CreateDirectory(ConfigPath);
+
+    GenerateMap(ConfigPath+CONFIG_MAP);
+    CloseFile(CreateFile(ConfigPath+CONFIG_FILE));
+
+    f := RewriteFile(Self.ConfigPath+CONFIG_FILE, True);
     WriteFileString(f, '[settings]'                     + #13#10);
     WriteFileString(f, 'BankPath   = '+ToStr(BankPath)  + #13#10);
     WriteFileString(f, 'RockSpots  = '+ToStr(RockSpots) + #13#10);
@@ -770,19 +832,31 @@ type
     CloseFile(f);
   end;
 
+label
+  START, QUERY_CONFIG;
+
 begin
   client2.Init(PluginPath);
   client2.GetIOManager.SetTarget2(GetRSAppletWnd(SMART.PID));
 
+START:
   r := Query('Do you wish to run setup?', ['Yes','No'], DefaultBox);
   if r = 'No' then
-  begin
-    r := QueryStr('Path to configfile: ', DefaultBox);
-    WriteLn('Loading from config: ', r);
-    LoadConfig(r);
+  begin QUERY_CONFIG:
+    Self.ConfigPath := CONFIG_PATH + QueryStr('Name of config: ', DefaultBox) + '/';
+
+    if not LoadConfig() then
+      case Query('Failed to load config, try again?', ['Yes','No'], DefaultBox) of
+        'Yes': goto QUERY_CONFIG;
+        'No' : goto START;
+      end;
+
     client2.Free();
     Exit();
   end;
+
+  r := MessageBox('Preparing, please stand by...', DefaultBox);
+  RSW.Init('world.png');
 
   Query('Click the rocks you wish to mine...', ['OK'], DefaultBox);
   RockSpots := SetupLocations();
@@ -790,16 +864,23 @@ begin
   Query('Click some colors for us to use...', ['OK'], DefaultBox);
   RockColors := SetupColors(RockSpots);
 
-  Query('Please walk to your bank', ['OK'], DefaultBox);
-  BankPath := RSWUtils.BuildPath(RecordPath(), 8);
+  r := Query('Select style:', ['Banking','Powermining'], DefaultBox);
+  if('Banking' in r) then
+  begin
+    Query('Please walk to your bank', ['OK'], DefaultBox);
+    BankPath := RSWUtils.BuildPath(RecordPath(), 8);
 
-  Query('Click valid bankers, or booths...', ['OK'], DefaultBox);
-  BankSpots := SetupLocations();
+    Query('Click valid bankers, or booths...', ['OK'], DefaultBox);
+    BankSpots := SetupLocations();
 
-  Query('Click some colors for us to use...', ['OK'], DefaultBox);
-  BankColors := SetupColors(BankSpots);
+    Query('Click some colors for us to use...', ['OK'], DefaultBox);
+    BankColors := SetupColors(BankSpots);
+  end;
 
-  StoreConfig(QueryStr('Store config as: ', DefaultBox));
+  Self.ConfigPath := CONFIG_PATH + QueryStr('Save config as: ', DefaultBox) + '/';
+  SaveConfig();
+
+  RSW.Free();
   client2.Free();
 end;
 
@@ -809,12 +890,13 @@ begin
   srl.Setup([]);
   AddOnTerminate(@smart.Free);
 
-  RSW.Init('world.png');
+  Bot.Init();
+  Bot.Setup();
+
+  RSW.Init(Bot.ConfigPath+CONFIG_MAP);
   RSW.skipClose := 25;
   RSW.walkStyle := wsSPS;
   AddOnTerminate(@RSW.Free);
 
-  Bot.Init();
-  Bot.Setup();
   Bot.Run();
 end.
