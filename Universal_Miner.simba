@@ -1,4 +1,4 @@
-program Universal_Miner_V003;
+program Universal_Miner_V004;
 {$DEFINE SMART}
 {$I SRL/OSR.simba}
 {$I RSWalker/Walker.simba}
@@ -114,7 +114,8 @@ end;
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
-// utility functions
+// UTILITY FUNCTIONS
+
 function StrToTPA(s:String): TPointArray;
 var
   i: Int32;
@@ -160,26 +161,6 @@ begin
   Result := Minimap.VecToMSRect(Vec3(ObjLoc.x - offx, ObjLoc.y - offy, Height), Angle);
 end;
 
-procedure MouseOffClient(direction: Byte);
-var
-  i,W,H: Int32;
-  pt: TPoint;
-begin
-  GetClientDimensions(W, H);
-  pt := Mouse.GetPosition();
-  if (pt.X < 0) or (pt.X > W) or (pt.Y < 0) or (pt.Y > H) then
-    Exit();
-  if (direction >= 4) then
-    direction := Random(0,3);
-  case direction of
-    0: Mouse.Move(Box(-300, -300, W, 0)); // top
-    1: Mouse.Move(Box(0, H, W, H+300));   // bottom
-    2: Mouse.Move(Box(-300, 0, 0, H));    // left
-    3: Mouse.Move(Box(W, 0, W+300, H));   // right
-  end;
-end;
-
-
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -212,72 +193,77 @@ var
 begin
   Inc(__RndCalls);
   CPH := Max(1, __RndCalls / (GetTimeRunning() / (1000*60*60)));
-  case Random(round(CPH) * 24) of
-    0..72: {3 per hour}
-      begin
-        WriteLn('[RND] Check skill stats');
-        Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000), Random(0,4) > 1);
-      end;
 
-    73..85: {1 per hour}
-      begin
-        WriteLn('[RND] Check overall stats');
-        Stats.Open();
-        WaitEx(5000,500);
-        Inventory.Open();
-      end;
+  {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
+  if (24 * 5.0) > Random(round(CPH) * 24) then {5 per hour}
+  begin
+    WriteLn('[RND] Hovering players');
+    srl.HoverRandomPlayer();
+  end;
+  {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
+  if (24 * 3.0) > Random(round(CPH) * 24) then {3 per hour}
+  begin
+    WriteLn('[RND] Check skill stats');
+    Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000), Random(0,4) > 1);
+  end;
+  {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
+  if (24 * 1.0) > Random(round(CPH) * 24) then {1 per hour}
+  begin
+    WriteLn('[RND] Check overall stats');
+    Stats.Open();
+    WaitEx(5000,500);
+    Inventory.Open();
+  end;
+  {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
+  if (24 * 1.0) > Random(round(CPH) * 24) then {1 per hour}
+  begin
+    WriteLn('[RND] Taking a breather');
+    if Random(2)=0 then SRL.MouseOffClient();
+    WaitEx(45000,3000);
 
-    86..98: {1 per hour}
-      begin
-        WriteLn('[RND] Taking a breather');
-        if Random(2)=0 then MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
-        WaitEx(45000,3000);
+    if not(srl.isLoggedIn()) then
+      Players.GetCurrent()^.Login();
 
-        if not(srl.isLoggedIn()) then
-          Players.GetCurrent()^.Login();
+    Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000));
+  end;
+  {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
+  if (24 * 0.5) > Random(round(CPH) * 24) then {1 per 2 hours}
+  begin
+    WriteLn('[RND] Doing misc stuff');
+    if Random(2) = 0 then
+      Gametabs.Open(tabFriends);
 
-        Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000));
-      end;
+    WaitEx(3000,500);
+    if Random(0, 9) = 0 then
+    begin
+      if Random(2)=0 then SRL.MouseOffClient();
+      WaitEx(30000,2500);
+    end;
 
-    100..105: {every two hours}
-      begin
-        WriteLn('[RND] Doing misc stuff');
-        if Random(2) = 0 then
-          Gametabs.Open(tabFriends);
+    if Random(0, 9) > 3 then
+    begin
+      Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000), Random(0,4) > 1);
+      WaitEx(2000,500);
+    end;
+  end;
+  {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
+  if (24 * 0.25) > Random(round(CPH) * 24) then {1 per 4 hours}
+  begin
+    PauseLen := Trunc(srl.GaussRand(1000*60*35, 1000*60*5));
+    WriteLn('[RND] Pausing for ', SRL.MsToTime(PauseLen, Time_Formal));
 
-        WaitEx(3000,500);
-        if Random(0, 9) = 0 then
-        begin
-          if Random(2)=0 then MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
-          WaitEx(30000,2500);
-        end;
+    Logout.Open();            WaitEx(700,90);
+    Logout.ClickLogout();     WaitEx(700,90);
+    SRL.MouseOffClient();
 
-        if Random(0, 9) > 3 then
-        begin
-          Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000), Random(0,4) > 1);
-          WaitEx(2000,500);
-        end;
-      end;
+    repeat
+      Wait(Max(PauseLen, 1000*60*5));
+      PauseLen -= 1000*60;
+      WriteLn('[RND] ', SRL.MsToTime(PauseLen, Time_Formal), ' left of the break');
+    until PauseLen < 0;
 
-    110..113: {every four hours}
-      begin
-        PauseLen := Trunc(srl.GaussRand(1000*60*35, 1000*60*5));
-        WriteLn('[RND] Pausing for ', SRL.MsToTime(PauseLen, Time_Formal));
-
-        Logout.Open();            WaitEx(700,90);
-        Logout.ClickLogout();     WaitEx(700,90);
-
-        MouseOffClient([1,1,1,1,1,2,2,2,3][Random(0,8)]);
-
-        repeat
-          Wait(Max(PauseLen, 1000*60*5));
-          PauseLen -= 1000*60*5;
-          WriteLn('[RND] ', SRL.MsToTime(PauseLen, Time_Formal), ' remaining of the break');
-        until PauseLen < 0;
-
-        if not(srl.isLoggedIn()) then
-          Players.GetCurrent()^.Login();
-      end;
+    if not(srl.isLoggedIn()) then
+      Players.GetCurrent()^.Login();
   end;
 end;
 
@@ -380,14 +366,14 @@ procedure TMiner.DoBanking();
     slots: TIntArray;
   begin
     slots := Inventory.GetUsedSlots();
-    slots.Del(0,1); //reserved
+    slots.Del(0); //reserved
     while Length(slots) > 0 do
     begin
       Inventory.MouseSlot(slots[0]);
       ChooseOption.Select(['Deposit-All']);
       while Inventory.IsSlotUsed(slots[0]) do WaitEx(90,10);
       slots := Inventory.GetUsedSlots();
-      slots.Del(0,2);
+      slots.Del(0);
     end;
   end;
 
@@ -620,7 +606,6 @@ type
     Button := GetButton('OK');
     DrawButton(Point(Area.x1+48, Area.y1+50), Button);
 
-
     // handling
     pt.x := B.x2+5;
     pt.y := Area.y1+20;
@@ -639,7 +624,7 @@ type
       if chr <> #0 then
       begin
         Result += Lowercase(chr);
-        PressKey(VK_BACK);
+        Keyboard.PressKey(VK_BACK);
         smart.Image.DrawText(Result,'SmallChars07', pt, False, 1);
       end;
 
@@ -648,7 +633,7 @@ type
         TPA := TPAFromText(Result, 'SmallChars07');
         TPA.Offset(pt);
         smart.Image.DrawBox(GetTPABounds(TPA), True, 8758968);
-
+        while IsKeyDown2(VK_BACK) do Wait(50);
         SetLength(Result, Length(Result)-1);
         smart.Image.DrawText(Result, 'SmallChars07', pt, False, 1);
       end;
@@ -864,8 +849,7 @@ START:
   Query('Click some colors for us to use...', ['OK'], DefaultBox);
   RockColors := SetupColors(RockSpots);
 
-  r := Query('Select style:', ['Banking','Powermining'], DefaultBox);
-  if('Banking' in r) then
+  if('Banking' = Query('Select style:', ['Banking','Powermining'], DefaultBox)) then
   begin
     Query('Please walk to your bank', ['OK'], DefaultBox);
     BankPath := RSWUtils.BuildPath(RecordPath(), 8);
