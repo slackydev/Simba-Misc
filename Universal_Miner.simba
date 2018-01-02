@@ -156,7 +156,7 @@ var
   Angle: Double;
 begin
   ObjLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (ObjLoc - Me);
-  Angle  := minimap.GetCompassAngle(False);
+  Angle  := Minimap.GetCompassAngle(False);
   ObjLoc := ObjLoc.Rotate(Angle, Point(MM2MS.MMCX, MM2MS.MMCY));
   Result := Minimap.VecToMSRect(Vec3(ObjLoc.x - offx, ObjLoc.y - offy, Height), Angle);
 end;
@@ -364,21 +364,33 @@ procedure TMiner.DoBanking();
   procedure BankInventory();
   var
     slots: TIntArray;
+    t: TCountDown;
   begin
     slots := Inventory.GetUsedSlots();
-    slots.Del(0); //reserved
+    slots.Remove(0); //reserved
     while Length(slots) > 0 do
     begin
       Inventory.MouseSlot(slots[0]);
       ChooseOption.Select(['Deposit-All']);
-      while Inventory.IsSlotUsed(slots[0]) do WaitEx(90,10);
+      t.Init(2000);
+      while Inventory.IsSlotUsed(slots[0]) and (not t.IsFinished) do WaitEx(90,10);
       slots := Inventory.GetUsedSlots();
-      slots.Del(0);
+      slots.Remove(0);
     end;
+    Wait(100, 6000, wdLeft);
+  end;
+
+  function Walk(path: TPointArray): Boolean;
+  begin
+    for 0 to 2 do
+      if RSW.WalkPath(Path) then
+        Exit(True)
+      else
+        Wait(800, 3200, wdRight);
   end;
 
 begin
-  if not RSW.WalkPath(self.BankPath) then
+  if not Walk(self.BankPath) then
   begin
     WriteLn('Terminating: Failed to walk path [1]');
     TerminateScript;
@@ -395,7 +407,7 @@ begin
   BankInventory();
   PostAction;
 
-  if not RSW.WalkPath(self.BankPath.Reversed) then
+  if not Walk(self.BankPath.Reversed) then
   begin
     WriteLn('Terminating: Failed to walk path [2]');
     TerminateScript;
