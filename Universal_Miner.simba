@@ -1,4 +1,4 @@
-program Universal_Miner_V004;
+program Universal_Miner_V005;
 {$DEFINE SMART}
 {$I SRL/OSR.simba}
 {$I RSWalker/Walker.simba}
