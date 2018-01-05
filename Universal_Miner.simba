@@ -1,4 +1,4 @@
-program Universal_Miner_V005;
+program Universal_Miner_V006;
 {$DEFINE SMART}
 {$I SRL/OSR.simba}
 {$I RSWalker/Walker.simba}
@@ -23,6 +23,7 @@ type
   TStatistics = record
     Trips: Int32;
     OreCount: Int32;
+    XPPerOre: Int32;
   end;
 
   TMiner = record
@@ -37,6 +38,7 @@ type
 
     BankPath: TPointArray;
 
+    StartTime: Int64;
     BotStats: TStatistics;
 
     __RndCalls: Int32;
@@ -166,6 +168,12 @@ end;
 // -----------------------------------------------------------------------------
 // MINER
 
+function TMiner.GetTimeRunning(): Int64;
+begin
+  Result := GetTickCount() - Self.StartTime;
+end;
+
+
 procedure TMiner.DeclarePlayers();
 begin
   with Players.New()^ do
@@ -190,12 +198,13 @@ var
   CPH: Double;
   PauseLen: Int32;
   Counter: TCountDown;
+  SkillInfo: TSkillInfo;
 begin
   Inc(__RndCalls);
   CPH := Max(1, __RndCalls / (GetTimeRunning() / (1000*60*60)));
 
   {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
-  if (24 * 5.0) > Random(round(CPH) * 24) then {5 per hour}
+  if (24 * 4.0) > Random(round(CPH) * 24) then {4 per hour}
   begin
     WriteLn('[RND] Hovering players');
     srl.HoverRandomPlayer();
@@ -204,7 +213,7 @@ begin
   if (24 * 3.0) > Random(round(CPH) * 24) then {3 per hour}
   begin
     WriteLn('[RND] Check skill stats');
-    Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000), Random(0,4) > 1);
+    Stats.HoverSkill(SKILL_MINING, srl.NormalRange(2000,6000), Random(0,4) > 1);
   end;
   {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
   if (24 * 1.0) > Random(round(CPH) * 24) then {1 per hour}
@@ -273,6 +282,16 @@ begin
   if DoAntiban then AntiBan;
 end;
 
+function TMiner.GetCurrentXP(ReturnToCurrent: Boolean): Int32;
+var
+  old: EGametab;
+begin
+  old := Gametabs.GetCurrent();
+  Result := Stats.GetSkillInfo(SKILL_MINING).XP;
+  if ReturnToCurrent then
+    Gametabs.Open(old);
+end;
+
 function TMiner.Contains(R: TRectangle; Colors: array of TCTS2Color): Boolean;
 var
   TPA: TPointArray;
@@ -307,8 +326,13 @@ var
   i,next: Int32;
   T: TCountDown;
   TRA: TRectArray;
+  tmpCurrXP, invCount: Int32;
 begin
   TRA := Find(self.RockSpots);
+  invCount := Length(Inventory.GetUsedSlots);
+  if Self.BotStats.XPPerOre = 0 then
+    tmpCurrXP := Self.GetCurrentXP(False);
+
   for i:=0 to High(TRA) do
   begin
     if not Contains(TRA[i], Self.RockColors) then
@@ -328,12 +352,20 @@ begin
     next := (i+1) mod Length(TRA);
     mouse.Move(TRA[next].Mean, Round(TRA[next].Radius));
 
-    T.Init(srl.NormalRange(8500,12000));
+    T.Init(srl.NormalRange(8500,12000)); //dynamic me please
     while (not T.IsFinished) and Contains(TRA[i], Self.RockColors) do
     begin
       Chatbox.HandleLevelUp();
       AntiBan;
       Wait(10);
+    end;
+
+    if Length(Inventory.GetUsedSlots) > invCount then
+    begin
+      if Self.BotStats.XPPerOre = 0 then
+        Self.BotStats.XPPerOre := Self.GetCurrentXP(True)-tmpCurrXP;
+
+      Inc(Self.BotStats.OreCount);
     end;
     Exit(True);
   end;
@@ -377,7 +409,7 @@ procedure TMiner.DoBanking();
       slots := Inventory.GetUsedSlots();
       slots.Remove(0);
     end;
-    Wait(100, 6000, wdLeft);
+    Wait(1, 2500, wdLeft);
   end;
 
   function Walk(path: TPointArray): Boolean;
@@ -452,8 +484,13 @@ begin
     if Self.DoWork() then
     begin
       ClearDebug();
-      WriteLn('Trips  : ', BotStats.Trips);
-      WriteLn('Runtime: ', SRL.MsToTime(GetTimeRunning, Time_Formal));
+      WriteLn('/-- STATS -----------------------------------------------------');
+      WriteLn('|- Trips / Drops       : ', BotStats.Trips);
+      WriteLn('|- Ores Mined          : ', BotStats.OreCount);
+      WriteLn('|- Experience Gained   : ', BotStats.OreCount * BotStats.XPPerOre);
+      WriteLn('|- Experience Per Hour : ', Round((BotStats.OreCount * BotStats.XPPerOre) / (GetTimeRunning()/1000/60/60)) );
+      WriteLn('|- Script Runtime      : ', SRL.MsToTime(GetTimeRunning, Time_Formal));
+      WriteLn('\--------------------------------------------------------------');
       Self.AntiBan;
     end;
   end;
@@ -888,6 +925,7 @@ begin
 
   Bot.Init();
   Bot.Setup();
+  Bot.StartTime := GetTickCount;
 
   RSW.Init(Bot.ConfigPath+CONFIG_MAP);
   RSW.skipClose := 25;
