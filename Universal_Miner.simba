@@ -1,4 +1,4 @@
-program Universal_Miner_V006;
+program Universal_Miner_V007;
 {$DEFINE SMART}
 {$I SRL/OSR.simba}
 {$I RSWalker/Walker.simba}
@@ -24,6 +24,7 @@ type
     Trips: Int32;
     OreCount: Int32;
     XPPerOre: Int32;
+    DismissedRandoms: Int32;
   end;
 
   TMiner = record
@@ -203,6 +204,9 @@ begin
   Inc(__RndCalls);
   CPH := Max(1, __RndCalls / (GetTimeRunning() / (1000*60*60)));
 
+  if srl.DismissRandom() then
+    Inc(Self.BotStats.DismissedRandoms);
+
   {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
   if (24 * 4.0) > Random(round(CPH) * 24) then {4 per hour}
   begin
@@ -213,14 +217,14 @@ begin
   if (24 * 3.0) > Random(round(CPH) * 24) then {3 per hour}
   begin
     WriteLn('[RND] Check skill stats');
-    Stats.HoverSkill(SKILL_MINING, srl.NormalRange(2000,6000), Random(0,4) > 1);
+    Stats.HoverSkill(SKILL_MINING, srl.GaussRand(2000,170), Random(0,4) > 1);
   end;
   {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
   if (24 * 1.0) > Random(round(CPH) * 24) then {1 per hour}
   begin
     WriteLn('[RND] Check overall stats');
     Stats.Open();
-    WaitEx(5000,500);
+    WaitEx(5000,400);
     Inventory.Open();
   end;
   {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
@@ -229,11 +233,8 @@ begin
     WriteLn('[RND] Taking a breather');
     if Random(2)=0 then SRL.MouseOffClient();
     WaitEx(45000,3000);
-
-    if not(srl.isLoggedIn()) then
-      Players.GetCurrent()^.Login();
-
-    Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000));
+    Players.GetCurrent()^.Login();
+    Stats.HoverSkill(SKILL_MINING, srl.GaussRand(2000,170));
   end;
   {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
   if (24 * 0.5) > Random(round(CPH) * 24) then {1 per 2 hours}
@@ -242,23 +243,23 @@ begin
     if Random(2) = 0 then
       Gametabs.Open(tabFriends);
 
-    WaitEx(3000,500);
+    WaitEx(3000,200);
     if Random(0, 9) = 0 then
     begin
       if Random(2)=0 then SRL.MouseOffClient();
-      WaitEx(30000,2500);
+      WaitEx(30000,2200);
     end;
 
     if Random(0, 9) > 3 then
     begin
-      Stats.HoverSkill(SKILL_MINING, srl.NormalRange(4000,6000), Random(0,4) > 1);
-      WaitEx(2000,500);
+      Stats.HoverSkill(SKILL_MINING, srl.GaussRand(2000,170), Random(0,4) > 1);
+      WaitEx(2500,300);
     end;
   end;
   {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
   if (24 * 0.25) > Random(round(CPH) * 24) then {1 per 4 hours}
   begin
-    PauseLen := Trunc(srl.GaussRand(1000*60*35, 1000*60*5));
+    PauseLen := Trunc(srl.GaussRand(1000*60*35, 1000*60*5)); //30-40 minutes norm
     WriteLn('[RND] Pausing for ', SRL.MsToTime(PauseLen, Time_Formal));
 
     Logout.Open();            WaitEx(700,90);
@@ -270,10 +271,9 @@ begin
       PauseLen -= 1000*60;
       WriteLn('[RND] ', SRL.MsToTime(PauseLen, Time_Formal), ' left of the break');
     until PauseLen < 0;
-
-    if not(srl.isLoggedIn()) then
-      Players.GetCurrent()^.Login();
   end;
+
+  Players.GetCurrent()^.Login();
 end;
 
 procedure TMiner.PostAction(DoAntiban: Boolean = True);
@@ -318,6 +318,9 @@ begin
     if MainScreen.GetBounds.Contains(rect.Bounds) then
       Result += rect;
   end;
+
+  if Length(Result) = 0 then
+    TerminateScript('Not close enough to objects: ('+ ToStr(me.x) +','+ToStr(me.y)+') -> '+ ToStr(locations));
 end;
 
 
@@ -393,7 +396,7 @@ procedure TMiner.DoBanking();
     end;
   end;
 
-  procedure BankInventory();
+  function BankInventory(): Boolean;
   var
     slots: TIntArray;
     t: TCountDown;
@@ -403,13 +406,14 @@ procedure TMiner.DoBanking();
     while Length(slots) > 0 do
     begin
       Inventory.MouseSlot(slots[0]);
-      ChooseOption.Select(['Deposit-All']);
+      ChooseOption.Select('Deposit-All');
       t.Init(2000);
       while Inventory.IsSlotUsed(slots[0]) and (not t.IsFinished) do WaitEx(90,10);
       slots := Inventory.GetUsedSlots();
       slots.Remove(0);
     end;
-    Wait(1, 2500, wdLeft);
+    Wait(1, 1200, wdLeft);
+    Result := not Inventory.IsFull();
   end;
 
   function Walk(path: TPointArray): Boolean;
@@ -423,27 +427,20 @@ procedure TMiner.DoBanking();
 
 begin
   if not Walk(self.BankPath) then
-  begin
-    WriteLn('Terminating: Failed to walk path [1]');
-    TerminateScript;
-  end;
+    TerminateScript('Failed to walk path [1]');
   AntiBan;
 
   if not OpenBank() then
-  begin
-    WriteLn('Terminating: Failed to open bank');
-    TerminateScript;
-  end;
-
+    TerminateScript('Failed to open bank');
   PostAction(False);
-  BankInventory();
+
+  if not BankInventory() then
+    TerminateScript('Failed to deposit items');
   PostAction;
 
   if not Walk(self.BankPath.Reversed) then
-  begin
-    WriteLn('Terminating: Failed to walk path [2]');
-    TerminateScript;
-  end;
+    TerminateScript('Failed to walk path [2]');
+
   AntiBan;
 end;
 
@@ -463,13 +460,10 @@ begin
     loc := RSW.GetMyPos();
     if (Distance(loc, self.BankPath[high(self.BankPath)]) < Distance(loc, self.BankPath[0])) and
        (not RSW.WalkPath(self.BankPath.Reversed)) then
-    begin
-      WriteLn('Terminating: Failed to walk from bank');
-      TerminateScript;
-    end;
+      TerminateScript('Failed to walk from bank on startup');
   end;
 
-  while SRL.IsLoggedIn do
+  while True do
   begin
     if Inventory.IsFull then
     begin
@@ -484,15 +478,17 @@ begin
     if Self.DoWork() then
     begin
       ClearDebug();
-      WriteLn('/-- STATS -----------------------------------------------------');
+      WriteLn('+---| STATS |--------------------------------------------------');
       WriteLn('|- Trips / Drops       : ', BotStats.Trips);
       WriteLn('|- Ores Mined          : ', BotStats.OreCount);
       WriteLn('|- Experience Gained   : ', BotStats.OreCount * BotStats.XPPerOre);
       WriteLn('|- Experience Per Hour : ', Round((BotStats.OreCount * BotStats.XPPerOre) / (GetTimeRunning()/1000/60/60)) );
+      WriteLn('|- Dismissed Randoms   : ', BotStats.DismissedRandoms);
       WriteLn('|- Script Runtime      : ', SRL.MsToTime(GetTimeRunning, Time_Formal));
-      WriteLn('\--------------------------------------------------------------');
+      WriteLn('+--------------------------------------------------------------');
       Self.AntiBan;
-    end;
+    end else
+      Players.GetCurrent()^.Login();
   end;
 end;
 
