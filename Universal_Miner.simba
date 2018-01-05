@@ -10,6 +10,7 @@ program Universal_Miner_V007;
 |   1. For longer runs you need to declare login details bellow
 |   2. Start the script at your mining site, and run setup.
 [==============================================================================}
+{$DEFINE SMARTDEBUG}
 const
   LOGIN_NAME  = '????????';
   LOGIN_PASS  = '********';
@@ -25,6 +26,8 @@ type
     OreCount: Int32;
     XPPerOre: Int32;
     DismissedRandoms: Int32;
+
+    Isset_XPPerOre: Boolean;
   end;
 
   TMiner = record
@@ -39,6 +42,7 @@ type
 
     BankPath: TPointArray;
 
+    QuickDeposit: Boolean;
     StartTime: Int64;
     BotStats: TStatistics;
 
@@ -300,7 +304,7 @@ begin
   for i:=0 to High(Colors) do
   begin
     count += srl.FindColors(TPA, Colors[i], R.Bounds);
-    if count > 150 then
+    if count > 150 then  //XXXXXXXXXXXX
       Exit(True);
   end;
 end;
@@ -331,10 +335,13 @@ var
   TRA: TRectArray;
   tmpCurrXP, invCount: Int32;
 begin
+  invCount := Inventory.Count;
   TRA := Find(self.RockSpots);
-  invCount := Length(Inventory.GetUsedSlots);
-  if Self.BotStats.XPPerOre = 0 then
-    tmpCurrXP := Self.GetCurrentXP(False);
+
+  if (not Self.BotStats.Isset_XPPerOre) and (Self.BotStats.XPPerOre = 0) then
+  begin
+    Self.BotStats.XPPerOre := Self.GetCurrentXP(False);
+  end;
 
   for i:=0 to High(TRA) do
   begin
@@ -350,12 +357,14 @@ begin
     while Minimap.isPlayerMoving() do Wait(65);
 
     TRA := Find(self.RockSpots); // update the TRA, it will have the same order still.
+    {$IFDEF SMARTDEBUG}
     smart.Image.DrawTPA(TRA[i].ToTPA.Connect, $00FF00);
+    {$ENDIF}
 
     next := (i+1) mod Length(TRA);
     mouse.Move(TRA[next].Mean, Round(TRA[next].Radius));
 
-    T.Init(srl.NormalRange(8500,12000)); //dynamic me please
+    T.Init(srl.NormalRange(8500,12000)); //XXXXXXXXXXXX
     while (not T.IsFinished) and Contains(TRA[i], Self.RockColors) do
     begin
       Chatbox.HandleLevelUp();
@@ -363,13 +372,15 @@ begin
       Wait(10);
     end;
 
-    if Length(Inventory.GetUsedSlots) > invCount then
+    if (not Self.BotStats.Isset_XPPerOre) then
     begin
-      if Self.BotStats.XPPerOre = 0 then
-        Self.BotStats.XPPerOre := Self.GetCurrentXP(True)-tmpCurrXP;
-
-      Inc(Self.BotStats.OreCount);
+      Self.BotStats.XPPerOre -= Self.GetCurrentXP(False);
+      Self.BotStats.Isset_XPPerOre := Self.BotStats.XPPerOre <> 0;
     end;
+
+    if (Inventory.Count > invCount) then
+      Inc(Self.BotStats.OreCount);
+
     Exit(True);
   end;
 end;
@@ -401,6 +412,9 @@ procedure TMiner.DoBanking();
     slots: TIntArray;
     t: TCountDown;
   begin
+    if Self.QuickDeposit then
+      Exit(BankScreen.DepositAll);
+
     slots := Inventory.GetUsedSlots();
     slots.Remove(0); //reserved
     while Length(slots) > 0 do
@@ -414,6 +428,9 @@ procedure TMiner.DoBanking();
     end;
     Wait(1, 1200, wdLeft);
     Result := not Inventory.IsFull();
+
+    if Inventory.Count = 0 then
+      Self.QuickDeposit := True;
   end;
 
   function Walk(path: TPointArray): Boolean;
@@ -434,7 +451,7 @@ begin
     TerminateScript('Failed to open bank');
   PostAction(False);
 
-  if not BankInventory() then
+  if (not BankInventory()) then
     TerminateScript('Failed to deposit items');
   PostAction;
 
@@ -447,7 +464,10 @@ end;
 
 procedure TMiner.DropInventory();
 begin
-  Inventory.DropItemsExcept([0], Inventory.ErrorPattern);
+  if Self.QuickDeposit then
+    Inventory.DropItems(Inventory.ErrorPattern)
+  else
+    Inventory.DropItemsExcept([0], Inventory.ErrorPattern);
 end;
 
 
@@ -463,18 +483,25 @@ begin
       TerminateScript('Failed to walk from bank on startup');
   end;
 
-  while True do
-  begin
+  if Inventory.Count = 0 then
+    Self.QuickDeposit := True;
+
+  repeat
     if Inventory.IsFull then
     begin
+      {$IFDEF SMARTDEBUG}
       smart.Image.Clear();
+      {$ENDIF}
+
       if HasBanking then Self.DoBanking()
       else               Self.DropInventory();
       Inc(BotStats.Trips);
     end;
-
+    {$IFDEF SMARTDEBUG}
     smart.Image.Clear();
     smart.Image.DrawBox(Self.PlayerBox, False, $666666);
+    {$ENDIF}
+
     if Self.DoWork() then
     begin
       ClearDebug();
@@ -489,7 +516,7 @@ begin
       Self.AntiBan;
     end else
       Players.GetCurrent()^.Login();
-  end;
+  until False;
 end;
 
 
