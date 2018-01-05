@@ -374,7 +374,7 @@ begin
 
     if (not Self.BotStats.Isset_XPPerOre) then
     begin
-      Self.BotStats.XPPerOre -= Self.GetCurrentXP(False);
+      Self.BotStats.XPPerOre := Self.GetCurrentXP(False) - Self.BotStats.XPPerOre;
       Self.BotStats.Isset_XPPerOre := Self.BotStats.XPPerOre <> 0;
     end;
 
