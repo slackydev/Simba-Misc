@@ -272,7 +272,7 @@ begin
 
     repeat
       Wait(Max(PauseLen, 1000*60*5));
-      PauseLen -= 1000*60;
+      PauseLen -= 1000*60*5;
       WriteLn('[RND] ', SRL.MsToTime(PauseLen, Time_Formal), ' left of the break');
     until PauseLen < 0;
   end;
@@ -953,6 +953,7 @@ begin
   RSW.Init(Bot.ConfigPath+CONFIG_MAP);
   RSW.skipClose := 25;
   RSW.walkStyle := wsSPS;
+  RSW.minRunEnergy := 35;
   AddOnTerminate(@RSW.Free);
 
   Bot.Run();
