@@ -1,4 +1,4 @@
-program Universal_Miner_V011;
+program Universal_Miner_V012;
 {$DEFINE SMART}
 {$I SRL/OSR.simba}
 {$I RSWalker/Walker.simba}
@@ -12,8 +12,8 @@ program Universal_Miner_V011;
 [==============================================================================}
 {$DEFINE SMARTDEBUG}
 const
-  LOGIN_NAME  = '????????';
-  LOGIN_PASS  = '********';
+  LOGIN_NAME  = '';
+  LOGIN_PASS  = '';
   RS_WORLD    = 384;
   SHIFT_DROP  = True;
 
@@ -35,6 +35,10 @@ type
     Isset_XPPerOre: Boolean;
   end;
 
+  TClickHistory = record
+    Data: TRectArray;
+  end;
+
   TMiner = record
     PlayerBox: TBox;
     ConfigPath: String;
@@ -48,7 +52,7 @@ type
     BotStats: TStatistics;
     StatsDebugTick: Int64;
 
-    ClickOrder: array of TBox;
+    ClickOrder: TClickHistory;
     ProggyArea: TBox;
     BufferImage: TMufasaBitmap;
     __RndCalls: Int32;
@@ -182,6 +186,19 @@ begin
   Angle  := Minimap.GetCompassAngle(False);
   ObjLoc := ObjLoc.Rotate(Angle, Point(MM2MS.MMCX, MM2MS.MMCY));
   Result := Minimap.VecToMSRect(Vec3(ObjLoc.x - offx, ObjLoc.y - offy, Height), Angle);
+end;
+
+procedure TClickHistory.Push(x: TRectangle);
+begin
+  Insert(x, Self.Data, 0);
+end;
+
+function TClickHistory.Pop(): TRectangle;
+begin
+  if Length(Self.Data) < Length(Bot.RockSpots)  then
+    Exit(Self.Data[High(Self.Data)]);
+  Result := Self.Data[High(Self.Data)];
+  SetLength(Self.Data, High(Self.Data));
 end;
 
 
@@ -377,25 +394,25 @@ var
   SkillInfo: TSkillInfo;
 begin
   Inc(__RndCalls);
-  CPH := Max(1, __RndCalls / (GetTimeRunning() / (1000*60*60)));
+  CPH := Max(10, __RndCalls / (GetTimeRunning() / (1000*60*60)));
 
   if srl.DismissRandom() then
     Inc(Self.BotStats.DismissedRandoms);
 
   {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
-  if (24 * 4.0) > Random(round(CPH) * 24) then {4 per hour}
+  if (24 * 4.0) > Random(Round(CPH * 24)) then {4 per hour}
   begin
     WriteLn('[RND] Hovering players');
     srl.HoverRandomPlayer();
   end;
   {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
-  if (24 * 3.0) > Random(round(CPH) * 24) then {3 per hour}
+  if (24 * 3.0) > Random(Round(CPH * 24)) then {3 per hour}
   begin
     WriteLn('[RND] Check skill stats');
     Stats.HoverSkill(SKILL_MINING, srl.GaussRand(2000,170), Random(0,4) > 1);
   end;
   {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
-  if (24 * 1.0) > Random(round(CPH) * 24) then {1 per hour}
+  if (24 * 1.0) > Random(Round(CPH * 24)) then {1 per hour}
   begin
     WriteLn('[RND] Check overall stats');
     Stats.Open();
@@ -403,7 +420,7 @@ begin
     Inventory.Open();
   end;
   {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
-  if (24 * 1.0) > Random(round(CPH) * 24) then {1 per hour}
+  if (24 * 1.0) > Random(Round(CPH * 24)) then {1 per hour}
   begin
     WriteLn('[RND] Taking a breather');
     if Random(2)=0 then SRL.MouseOffClient();
@@ -412,7 +429,7 @@ begin
     Stats.HoverSkill(SKILL_MINING, srl.GaussRand(2000,170));
   end;
   {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
-  if (24 * 0.5) > Random(round(CPH) * 24) then {1 per 2 hours}
+  if (24 * 0.5) > Random(Round(CPH * 24)) then {1 per 2 hours}
   begin
     WriteLn('[RND] Doing misc stuff');
     if Random(2) = 0 then
@@ -432,9 +449,9 @@ begin
     end;
   end;
   {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
-  if (24 * 0.25) > Random(round(CPH) * 24) then {1 per 4 hours}
+  if (24 * 0.25) > Random(Round(CPH * 24)) then {1 per 4 hours}
   begin
-    PauseLen := Trunc(srl.GaussRand(1000*60*35, 1000*60*5)); //30-40 minutes norm
+    PauseLen := Trunc(srl.GaussRand(1000*60*25, 1000*60*5)); //20-30 minutes norm
     WriteLn('[RND] Pausing for ', SRL.MsToTime(PauseLen, Time_Formal));
 
     Logout.Open();            WaitEx(700,90);
@@ -442,8 +459,8 @@ begin
     SRL.MouseOffClient();
 
     repeat
-      Wait(Min(PauseLen, 1000*60*5));
-      PauseLen -= 1000*60*5;
+      Wait(Min(PauseLen, 1000*60*2));
+      PauseLen -= 1000*60*2;
       WriteLn('[RND] ', SRL.MsToTime(PauseLen, Time_Formal), ' left of the break');
     until PauseLen < 0;
   end;
@@ -479,7 +496,7 @@ begin
   BotStats.Rem := atNextLvl - BotStats.CurrXP;
   BotStats.PrcToNextLvl := 100 - Round((BotStats.Rem / (atNextLvl - atCurrLvl)) * 100);
 
-  if GetTickCount() - StatsDebugTick > 5000 then
+  if GetTickCount() - StatsDebugTick > 2000 then
   begin
     ClearDebug();
     WriteLn('+---| STATS |--------------------------------------------------');
@@ -556,6 +573,7 @@ begin
     WaitEx(60,8);
     if not Mouse.Click(ctRed) then Exit;
     PostAction;
+    ClickOrder.Push(TRA[i]);
 
     while Minimap.isPlayerMoving() do Wait(65);
 
@@ -564,15 +582,15 @@ begin
     smart.Image.DrawTPA(TRA[i].ToTPA.Connect, $00FF00);
     {$ENDIF}
 
-    next := (i+1) mod Length(TRA);
-    mouse.Move(TRA[next].Mean, Round(TRA[next].Radius));
+    with ClickOrder.Pop() do
+      mouse.Move(Mean, Round(Radius));
 
     T.Init(srl.NormalRange(8500,12000)); //XXXXXXXXXXXX
     while (not T.IsFinished) and Contains(TRA[i], Self.RockColors) do
     begin
       Chatbox.HandleLevelUp();
       Self.ProcessWhileWaiting();
-      Wait(60);
+      Wait(30);
     end;
 
     if (Inventory.Count > invCount) then
