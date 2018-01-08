@@ -12,9 +12,10 @@ program Universal_Miner_V008;
 [==============================================================================}
 {$DEFINE SMARTDEBUG}
 const
-  LOGIN_NAME  = '????????';
-  LOGIN_PASS  = '********';
+  LOGIN_NAME  = '';
+  LOGIN_PASS  = '';
   RS_WORLD    = 384;
+  SHIFT_DROP  = True;
 
   CONFIG_PATH = IncludePath+'Universal_Miner/';
   CONFIG_FILE = 'config.cfg';
@@ -42,8 +43,8 @@ type
 
     BankPath: TPointArray;
 
-    QuickDeposit: Boolean;
     StartTime: Int64;
+    QuickDeposit: Boolean;
     BotStats: TStatistics;
 
     __RndCalls: Int32;
@@ -372,7 +373,7 @@ begin
       Wait(10);
     end;
 
-    if (not Self.BotStats.Isset_XPPerOre) then
+    if (not Self.BotStats.Isset_XPPerOre) then //XXXXXXXXXXXX
     begin
       Self.BotStats.XPPerOre := Self.GetCurrentXP(False) - Self.BotStats.XPPerOre;
       Self.BotStats.Isset_XPPerOre := Self.BotStats.XPPerOre <> 0;
@@ -465,9 +466,9 @@ end;
 procedure TMiner.DropInventory();
 begin
   if Self.QuickDeposit then
-    Inventory.DropItems(Inventory.ErrorPattern)
+    Inventory.DropItems(Inventory.ErrorPattern(DROP_PATTERN_SNAKE))
   else
-    Inventory.DropItemsExcept([0], Inventory.ErrorPattern);
+    Inventory.DropItemsExcept([0], Inventory.ErrorPattern(DROP_PATTERN_SNAKE));
 end;
 
 
@@ -528,7 +529,6 @@ begin
   Mouse.Speed := 10;
   Players.GetCurrent()^.Login();
   mainscreen.SetAngle(True);
-  minimap.SetCompassAngle(0);
 end;
 
 
@@ -913,6 +913,7 @@ START:
   end;
 
   r := MessageBox('Preparing, please stand by...', DefaultBox);
+  minimap.SetCompassAngle(0);
   RSW.Init('world.png');
 
   Query('Click the rocks you wish to mine...', ['OK'], DefaultBox);
@@ -945,6 +946,8 @@ begin
   smart.EnableDrawing := True;
   srl.Setup([]);
   AddOnTerminate(@smart.Free);
+  Inventory.ShiftDrop := SHIFT_DROP;
+
 
   Bot.Init();
   Bot.Setup();
