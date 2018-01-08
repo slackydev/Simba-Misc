@@ -22,6 +22,10 @@ const
   CONFIG_MAP  = 'map.png';
 
 type
+  TClickHistory = record
+    Data: TRectArray;
+  end;
+
   TStatistics = record
     Trips: Int32;
     StartInfo: TSkillInfo;
@@ -31,12 +35,7 @@ type
     Gains,Rem,CurrXP:Double;
     XPPerOre: Int32;
     DismissedRandoms: Int32;
-
     Isset_XPPerOre: Boolean;
-  end;
-
-  TClickHistory = record
-    Data: TRectArray;
   end;
 
   TMiner = record
@@ -173,6 +172,7 @@ begin
   self.Speed := Trunc(minSpeed + (maxSpeed-minSpeed) * Power(dist / 1000, 1/2));
   inherited;
 end;
+
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -319,6 +319,11 @@ begin
   Self.DrawText(rText,Point(pt.x+w-5,ty),PercentBarFont,$FFFFFF,1,True,4);
 end;
 
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// MINER
+
 procedure TMiner.DrawProggy();
 var
   l: Int32;
@@ -356,11 +361,6 @@ begin
   end;
 end;
 
-
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-// MINER
-
 function TMiner.GetTimeRunning(): Int64;
 begin
   Result := GetTickCount() - Self.StartTime;
@@ -386,6 +386,7 @@ begin
   Result := (Self.BankColors <> []) and (Self.BankPath <> []) and (Self.BankSpots <> []);
 end;
 
+
 procedure TMiner.AntiBan();
 var
   CPH: Double;
@@ -399,19 +400,21 @@ begin
   if srl.DismissRandom() then
     Inc(Self.BotStats.DismissedRandoms);
 
-  {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
+  {--|  TASK  |---------}
   if (24 * 4.0) > Random(Round(CPH * 24)) then {4 per hour}
   begin
     WriteLn('[RND] Hovering players');
     srl.HoverRandomPlayer();
   end;
-  {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
+
+  {--|  TASK  |---------}
   if (24 * 3.0) > Random(Round(CPH * 24)) then {3 per hour}
   begin
     WriteLn('[RND] Check skill stats');
     Stats.HoverSkill(SKILL_MINING, srl.GaussRand(2000,170), Random(0,4) > 1);
   end;
-  {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
+
+  {--|  TASK  |---------}
   if (24 * 1.0) > Random(Round(CPH * 24)) then {1 per hour}
   begin
     WriteLn('[RND] Check overall stats');
@@ -419,7 +422,8 @@ begin
     WaitEx(5000,400);
     Inventory.Open();
   end;
-  {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
+
+  {--|  TASK  |---------}
   if (24 * 1.0) > Random(Round(CPH * 24)) then {1 per hour}
   begin
     WriteLn('[RND] Taking a breather');
@@ -428,7 +432,8 @@ begin
     Players.GetCurrent()^.Login();
     Stats.HoverSkill(SKILL_MINING, srl.GaussRand(2000,170));
   end;
-  {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
+
+  {--|  TASK  |---------}
   if (24 * 0.5) > Random(Round(CPH * 24)) then {1 per 2 hours}
   begin
     WriteLn('[RND] Doing misc stuff');
@@ -448,7 +453,8 @@ begin
       WaitEx(2500,300);
     end;
   end;
-  {+-|  TASK  |+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-}
+
+  {--|  TASK  |---------}
   if (24 * 0.25) > Random(Round(CPH * 24)) then {1 per 4 hours}
   begin
     PauseLen := Trunc(srl.GaussRand(1000*60*25, 1000*60*5)); //20-30 minutes norm
@@ -468,21 +474,13 @@ begin
   Players.GetCurrent()^.Login();
 end;
 
+
 procedure TMiner.PostAction(DoAntiban: Boolean = True);
 begin
   WaitEx(500,70);
   if DoAntiban then AntiBan;
 end;
 
-function TMiner.GetCurrentXP(ReturnToCurrent: Boolean): Int32;
-var
-  old: EGametab;
-begin
-  old := Gametabs.GetCurrent();
-  Result := Stats.GetSkillInfo(SKILL_MINING).XP;
-  if ReturnToCurrent then
-    Gametabs.Open(old);
-end;
 
 procedure TMiner.ProcessWhileWaiting();
 var
@@ -507,13 +505,16 @@ begin
     WriteLn('|- Dismissed Randoms   : ', BotStats.DismissedRandoms);
     WriteLn('|- Script Runtime      : ', SRL.MsToTime(GetTimeRunning, Time_Formal));
     WriteLn('+--------------------------------------------------------------');
+
     {$IFDEF SMARTDEBUG}
     Self.DrawProggy();
     {$ENDIF}
+
     StatsDebugTick := GetTickCount();
   end;
   AntiBan;
 end;
+
 
 function TMiner.Contains(R: TRectangle; Colors: array of TCTS2Color): Boolean;
 var
@@ -527,6 +528,7 @@ begin
       Exit(True);
   end;
 end;
+
 
 function TMiner.Find(Locations: TPointArray): TRectArray;
 var
@@ -553,6 +555,23 @@ var
   T: TCountDown;
   TRA: TRectArray;
   tmpCurrXP, invCount: Int32;
+
+  function ClickRock(rect: TRectangle): Int8;
+  begin
+    mouse.Move(TRA[i].Mean, Trunc(TRA[i].Radius));
+    if not Mainscreen.IsUpText(['Mine', 'Rocks']) then Exit(1);
+    WaitEx(60,8);
+    if not Mouse.Click(ctRed) then
+      Exit(0);
+
+    for 5 to Round(srl.TruncatedGauss(0,14)) do
+      Mouse.Click(mouse_Left);
+
+    PostAction;
+    ClickOrder.Push(TRA[i]);
+    Result := 2;
+  end;
+
 begin
   invCount := Inventory.Count;
   TRA := Find(self.RockSpots);
@@ -568,22 +587,19 @@ begin
     if not Contains(TRA[i], Self.RockColors) then
       Continue;
 
-    mouse.Move(TRA[i].Mean, Round(TRA[i].Radius));
-    if not Mainscreen.IsUpText(['Mine', 'Rocks']) then Continue;
-    WaitEx(60,8);
-    if not Mouse.Click(ctRed) then Exit;
-    PostAction;
-    ClickOrder.Push(TRA[i]);
+    case ClickRock(TRA[i]) of
+      0: Exit;
+      1: Continue;
+      2: while Minimap.isPlayerMoving() do Wait(65);
+    end;
 
-    while Minimap.isPlayerMoving() do Wait(65);
-
-    TRA := Find(self.RockSpots); // update the TRA, it will have the same order still.
+    TRA := Find(self.RockSpots); // update the TRA in case we moved
     {$IFDEF SMARTDEBUG}
     smart.Image.DrawTPA(TRA[i].ToTPA.Connect, $00FF00);
     {$ENDIF}
 
     with ClickOrder.Pop() do
-      mouse.Move(Mean, Round(Radius));
+      mouse.Move(Mean, Trunc(Radius));
 
     T.Init(srl.NormalRange(8500,12000)); //XXXXXXXXXXXX
     while (not T.IsFinished) and Contains(TRA[i], Self.RockColors) do
@@ -596,6 +612,7 @@ begin
     if (Inventory.Count > invCount) then
     begin
       Inc(Self.BotStats.Count);
+
       if (not Self.BotStats.Isset_XPPerOre) then //XXXXXXXXXXXX
       begin
         Self.BotStats.XPPerOre := Stats.GetSkillInfo(SKILL_MINING).XP - Self.BotStats.XPPerOre;
@@ -610,21 +627,13 @@ end;
 
 procedure TMiner.DoBanking();
   function OpenBank(): Boolean;
-  var
-    TRA: array of TRectangle;
-    i: Int32;
+  var Rect: TRectangle;
   begin
     for 0 to 3 do
     begin
-      TRA := Find(self.BankSpots);
-      for i:=0 to High(TRA) do
-      begin
-        if not Contains(TRA[i], Self.BankColors) then
-          Continue;
-
-        if BankScreen.OpenAt(srl.RandomPoint(TRA[i].Mean, Trunc(TRA[i].Radius))) then
+      for Rect in Find(self.BankSpots) do
+        if Contains(Rect, Self.BankColors) and BankScreen.OpenAt(srl.RandomPoint(Rect.Mean, Trunc(Rect.Radius))) then
           Exit(True);
-      end;
       Wait(800,1300);
     end;
   end;
@@ -665,21 +674,20 @@ procedure TMiner.DoBanking();
   end;
 
 begin
-  if not Walk(self.BankPath) then
+  if(not Walk(self.BankPath)) then
     TerminateScript('Failed to walk path [1]');
   AntiBan;
 
-  if not OpenBank() then
+  if(not OpenBank()) then
     TerminateScript('Failed to open bank');
   PostAction(False);
 
-  if (not BankInventory()) then
+  if(not BankInventory()) then
     TerminateScript('Failed to deposit items');
   PostAction;
 
-  if not Walk(self.BankPath.Reversed) then
+  if(not Walk(self.BankPath.Reversed)) then
     TerminateScript('Failed to walk path [2]');
-
   AntiBan;
 end;
 
@@ -709,7 +717,7 @@ begin
     Self.QuickDeposit := True;
 
   repeat
-    if Inventory.IsFull then
+    if (Random(10) <> 0) and Inventory.IsFull() then
     begin
       {$IFDEF SMARTDEBUG}
       smart.Image.ClearAllBut(ProggyArea);
@@ -799,7 +807,7 @@ type
 
   function GetButton(txt: String): TButtonBox;
   begin
-    Result.TextTPA := TPAFromText(txt, SmallChars07);
+    Result.TextTPA := TPAFromText(txt, StatChars07);
     Result.Bounds  := GetTPABounds(Result.TextTPA).ExpandFunc(8);
   end;
 
@@ -807,8 +815,8 @@ type
   begin
     Button.TextTPA.Offset(p);
     Button.Bounds.Offset(p);
-    smart.Image.DrawBox(Button.Bounds, True, $111111);
-    smart.Image.DrawBox(Button.Bounds.ExpandFunc(-2), True, 4410968);
+    smart.Image.DrawBox(Button.Bounds, True, 2502198);
+    smart.Image.DrawBox(Button.Bounds.ExpandFunc(-1), True, 4607315);
     smart.Image.DrawTPA(Button.TextTPA, $FFFFFF);
   end;
 
@@ -819,14 +827,16 @@ type
     box: TBox;
   begin
     if (Area.x1 = Area.x2) then Area := chatbox.GetBounds;
-    smart.Image.DrawBox(Area.ExpandFunc(-0), False, 1648179);
-    smart.Image.DrawBox(Area.ExpandFunc(-1), False, 4214871);
-    smart.Image.DrawBox(Area.ExpandFunc(-2), True,  8758968);
-    TPA := TPAFromText(Text, 'UpChars07');
+    smart.Image.DrawBox(Area.ExpandFunc(-0), False, $1F2F33);
+    smart.Image.DrawBox(Area.ExpandFunc(-1), False, $3F4A5A);
+    smart.Image.DrawBox(Area.ExpandFunc(-2), False, $1F2F33);
+    smart.Image.DrawBox(Area.ExpandFunc(-3), True,  $171D20);
+
+    TPA := TPAFromText(Text, SmallChars07);
     box := GetTPABounds(TPA);
     xstart := (box.Width + Area.Width) div 2 - box.Width;
     OffsetTPA(TPA, Point(Area.x1+xstart, Area.y1+20));
-    smart.Image.DrawTPA(TPA, $1);
+    smart.Image.DrawTPA(TPA, $FFFFFF);
   end;
 
   function Query(Text: String; Alts:TStringArray; Area:TBox=[]): string;
@@ -848,6 +858,7 @@ type
       xOffset   += CurrWidth;
       CurrWidth += Buttons[i].Bounds.X2+20;
     end;
+    CurrWidth -= 20;
 
     xstart := (CurrWidth + Area.Width) div 2 - CurrWidth;
     for i:=0 to High(Buttons) do
@@ -880,13 +891,14 @@ type
       Area := chatbox.GetBounds;
 
     // query
-    smart.Image.DrawBox(Area.ExpandFunc(-0), False, 1648179);
-    smart.Image.DrawBox(Area.ExpandFunc(-1), False, 4214871);
-    smart.Image.DrawBox(Area.ExpandFunc(-2), True,  8758968);
+    smart.Image.DrawBox(Area.ExpandFunc(-0), False, $1F2F33);
+    smart.Image.DrawBox(Area.ExpandFunc(-1), False, $3F4A5A);
+    smart.Image.DrawBox(Area.ExpandFunc(-2), False, $1F2F33);
+    smart.Image.DrawBox(Area.ExpandFunc(-3), True,  $171D20);
 
-    TPA := TPAFromText(Text, 'UpChars07');
+    TPA := TPAFromText(Text, SmallChars07);
     OffsetTPA(TPA, Point(Area.x1+40, Area.y1+20));
-    smart.Image.DrawTPA(TPA, $1);
+    smart.Image.DrawTPA(TPA, $FFFFFF);
     B := GetTPABounds(TPA);
 
     // button
@@ -896,8 +908,7 @@ type
     // handling
     pt.x := B.x2+5;
     pt.y := Area.y1+20;
-    while True do
-    begin
+    repeat
       while not HasFocus(smart.PID) do Wait(10);
 
       if GetClick(p) then
@@ -912,19 +923,19 @@ type
       begin
         Result += Lowercase(chr);
         Keyboard.PressKey(VK_BACK);
-        smart.Image.DrawText(Result,'SmallChars07', pt, False, 1);
+        smart.Image.DrawText(Result,'SmallChars07', pt, False, $FFCCAA);
       end;
 
       if IsKeyDown2(VK_BACK) and (Result <> '') then
       begin
         TPA := TPAFromText(Result, 'SmallChars07');
         TPA.Offset(pt);
-        smart.Image.DrawBox(GetTPABounds(TPA), True, 8758968);
+        smart.Image.DrawBox(GetTPABounds(TPA), True, $FFCCAA);
         while IsKeyDown2(VK_BACK) do Wait(50);
         SetLength(Result, Length(Result)-1);
         smart.Image.DrawText(Result, 'SmallChars07', pt, False, 1);
       end;
-    end;
+    until False;
   end;
 
   function SetupLocations(): TPointArray;
@@ -1168,7 +1179,7 @@ begin
   Bot.Setup();
   Bot.StartTime := GetTickCount;
 
-  RSW.Init(Bot.ConfigPath+CONFIG_MAP);
+  RSW.Init(Bot.ConfigPath+CONFIG_MAP,-1);
   RSW.skipClose := 25;
   RSW.walkStyle := wsSPS;
   RSW.minRunEnergy := 35;
@@ -1176,3 +1187,4 @@ begin
 
   Bot.Run();
 end.
+
