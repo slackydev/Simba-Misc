@@ -442,7 +442,7 @@ begin
     SRL.MouseOffClient();
 
     repeat
-      Wait(Max(PauseLen, 1000*60*5));
+      Wait(Min(PauseLen, 1000*60*5));
       PauseLen -= 1000*60*5;
       WriteLn('[RND] ', SRL.MsToTime(PauseLen, Time_Formal), ' left of the break');
     until PauseLen < 0;
