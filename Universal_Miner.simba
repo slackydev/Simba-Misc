@@ -1,4 +1,4 @@
-program Universal_Miner_V009;
+program Universal_Miner_V010;
 {$DEFINE SMART}
 {$I SRL/OSR.simba}
 {$I RSWalker/Walker.simba}
@@ -24,7 +24,11 @@ const
 type
   TStatistics = record
     Trips: Int32;
-    OreCount: Int32;
+    StartInfo: TSkillInfo;
+    CurrLvl: Int32;
+    Count: Int32;
+    PrcToNextLvl: Int32;
+    Gains,Rem,CurrXP:Double;
     XPPerOre: Int32;
     DismissedRandoms: Int32;
 
@@ -46,7 +50,10 @@ type
     StartTime: Int64;
     QuickDeposit: Boolean;
     BotStats: TStatistics;
+    StatsDebugTick: Int64;
 
+    ProggyArea: TBox;
+    BufferImage: TMufasaBitmap;
     __RndCalls: Int32;
   end;
 
@@ -54,7 +61,6 @@ type
 var
   Bot: TMiner;
   RSW: TRSWalker;
-
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -154,6 +160,18 @@ begin
   end;
 end;
 
+procedure TMouse.Move(P: TPoint); override;
+var
+  dist: Double;
+  q: TPoint;
+  maxSpeed := 20;
+  minSpeed := 3;
+begin
+  q := Self.GetPosition;
+  dist := Hypot(q.x-p.x, q.y-p.y);
+  self.Speed := Trunc(minSpeed + (maxSpeed-minSpeed) * Power(dist / 1000, 1/2));
+  inherited;
+end;
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -167,6 +185,158 @@ begin
   Angle  := Minimap.GetCompassAngle(False);
   ObjLoc := ObjLoc.Rotate(Angle, Point(MM2MS.MMCX, MM2MS.MMCY));
   Result := Minimap.VecToMSRect(Vec3(ObjLoc.x - offx, ObjLoc.y - offy, Height), Angle);
+end;
+
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// DRAWING UTILITIES
+
+function NewFont(name:String; size:Int32; fs:TFontStyles; fq:TFontQuality): TFont;
+begin
+  Result.Init();
+  Result.SetName(name);
+  Result.SetSize(size);
+  Result.setStyle(fs);
+  Result.setQuality(fq);
+  Result.setColor($FFFFFF);
+end;
+
+var
+  ProggyFont     := NewFont('Arial', 7, [fsBold], fqCleartype);
+  PercentBarFont := NewFont('Arial', 7, [fsBold], fqCleartype);
+
+
+procedure TMufasaBitmap.ClearAllBut(Area: TBox);
+var
+  CLB: TBox;
+begin
+  CLB := srl.DefaultClientBounds;
+  Area.Expand(1);
+  Area.LimitTo(CLB);
+
+  Smart.Image.ClearArea(Box(CLB.X1,CLB.Y1,Area.x1,Area.y1));  //left  T
+  Smart.Image.ClearArea(Box(CLB.X1,Area.y1,Area.x1,Area.y2)); //..    M
+  Smart.Image.ClearArea(Box(CLB.X1,Area.y1,Area.x1,CLB.y2));  //..    B
+  Smart.Image.ClearArea(Box(Area.x1,CLB.Y1,Area.x2,Area.y1)); //mid   T
+  Smart.Image.ClearArea(Box(Area.x1,Area.y2,Area.x2,CLB.y2)); //..    B
+  Smart.Image.ClearArea(Box(Area.x2,CLB.Y1,CLB.x2,Area.y1));  //right T
+  Smart.Image.ClearArea(Box(Area.x2,Area.y1,CLB.x2,Area.y2)); //..    M
+  Smart.Image.ClearArea(Box(Area.x2,Area.y1,CLB.x2,CLB.y2));  //..    B
+end;
+
+procedure TMufasaBitmap.DrawText(txt:String; pt:TPoint; font:TFont;
+          color:Int32; align:Int32=0; shadow:Boolean=False; shadowDir:Byte=0); overload;
+var
+  bit:TBitmap;
+  muf:TMufasaBitmap;
+  W,H:Int32;
+begin
+  bit.Init();
+  bit.getCanvas().setFont(font);
+  bit.getCanvas().getBrush().setStyle(bsClear);
+
+  W := bit.getCanvas().TextWidth(txt);
+  H := bit.getCanvas().TextHeight(txt);
+  bit.setWidth(W+1);
+  bit.setHeight(H+1);
+
+  if align then
+    pt := Point(pt.x-W, pt.y);
+
+  muf := self.Copy(pt.x,pt.y,pt.x+W,pt.y+H);
+  muf.DrawToCanvas(0,0,bit.getCanvas());
+
+  if Shadow then
+  begin
+    bit.getCanvas().getFont().setColor(1);
+    case ShadowDir of
+      0:bit.getCanvas().TextOut(0,0,txt);
+      1:bit.getCanvas().TextOut(1,0,txt);
+      2:bit.getCanvas().TextOut(2,0,txt);
+      3:bit.getCanvas().TextOut(2,1,txt);
+      4:bit.getCanvas().TextOut(2,2,txt);
+      5:bit.getCanvas().TextOut(1,2,txt);
+      6:bit.getCanvas().TextOut(0,2,txt);
+      7:bit.getCanvas().TextOut(0,1,txt);
+    end;
+    bit.getCanvas().getFont().setColor(color);
+    bit.getCanvas().TextOut(1,1,txt);
+  end else
+  begin
+    bit.getCanvas().getFont().setColor(color);
+    bit.getCanvas().TextOut(0,0,txt);
+  end;
+  muf.LoadFromTBitmap(bit);
+  muf.DrawTransparent(pt.x,pt.y,self);
+
+  muf.Free();
+  bit.Free();
+end;
+
+procedure TMufasaBitmap.DrawTextNL(txt:TStringArray; pos:TPoint; font:TFont;
+          color:Int32; align:Int32=0; shadow:Boolean=False; shadowDir:Byte=0);
+var
+  i,hei:Int32;
+begin
+  hei := Round(1.8 * abs(font.getHeight()));
+  for i:=0 to High(txt) do
+  begin
+    Self.DrawText(txt[i],pos,font,color,align,shadow,shadowDir);
+    inc(pos.y,hei);
+  end;
+end;
+
+procedure TMufasaBitmap.DrawPrecentBar(pt:TPoint; w,h,percent:Int32; BgColor:Int32=986895; BarColor:Int32=1474364; lText:String=''; rText:String='');
+var
+  B:TBox;
+  tx,ty:Int32;
+begin
+  B := [pt.x,pt.y,pt.x+w-1,pt.y+h-1];
+  Self.DrawTPA(TPAFromBox(B), BgColor);
+  B.Expand(-2);
+  B.x2 := B.x1 + round(B.Width() * (percent*0.01));
+  Self.DrawTPA(TPAFromBox(B), BarColor);
+
+  tx := B.x1 + (W div 2) - 8;
+  ty := B.y1 + (H div 2) - Abs(PercentBarFont.GetHeight()) + 1;
+  Self.DrawText(ToStr(percent)+'%',Point(tx,ty),PercentBarFont,$FFFFFF);
+  Self.DrawText(lText,Point(b.x1+4,ty),PercentBarFont,$FFFFFF);
+  Self.DrawText(rText,Point(pt.x+w-5,ty),PercentBarFont,$FFFFFF,1);
+end;
+
+procedure TMiner.DrawProggy();
+var
+  l: Int32;
+  runtime: UInt32;
+  str: String;
+  statusText: TPointArray;
+begin
+  if (ProggyArea = []) then ProggyArea := [310,9,510,60];
+
+  try
+    runtime := GetTimeRunning() div 1000;
+
+    BufferImage.DrawBox(Box(310,9,510,60), True, 4138791);
+    BufferImage.DrawPrecentBar(
+      [315,12], 190, 20, BotStats.PrcToNextLvl, //pos, w,h, percent
+      986895,15163743,                          //colors
+      'Lvl: '+ToString(BotStats.CurrLvl),       //left-text
+      'Lvl: '+ToString(BotStats.CurrLvl+1)      //right-text
+    );
+
+    str := 'Runtime: '+Format('%.2d:%.2d:%.2d', [(runtime div 3600), (runtime div 60) mod 60, runtime mod 60]) +
+           '    XP/H: '+ToStr(Ceil(BotStats.Gains / (runtime / 3600)));
+    BufferImage.DrawText(str, Point(315,34), ProggyFont, $FFFFFF, 0, True, 4);
+
+    str := 'Gained: '+ToStr(Ceil(BotStats.Gains)) + ' XP' +
+           '    Mined: '+ToStr(BotStats.Count) + ' ores';
+    BufferImage.DrawText(str, Point(315,45), ProggyFont, $FFFFFF, 0, True, 4);
+
+    BufferImage.DrawTransparent(0,0, Smart.Image);
+  except
+    WriteLn('Error: Something went wrong');
+  end;
 end;
 
 
@@ -297,6 +467,37 @@ begin
     Gametabs.Open(old);
 end;
 
+procedure TMiner.ProcessWhileWaiting();
+var
+  n,atNextLvl,atCurrLvl:Int32;
+begin
+  BotStats.Gains := BotStats.count * BotStats.XPPerOre;
+  BotStats.CurrXP  := BotStats.StartInfo.XP + BotStats.Gains;
+  BotStats.CurrLvl := srl.GetLevelAtXP(Ceil(BotStats.CurrXP));
+  atNextLvl := srl.GetXPAtLevel(BotStats.CurrLvl+1);
+  atCurrLvl := srl.GetXPAtLevel(BotStats.CurrLvl);
+  BotStats.Rem := atNextLvl - BotStats.CurrXP;
+  BotStats.PrcToNextLvl := 100 - Round((BotStats.Rem / (atNextLvl - atCurrLvl)) * 100);
+
+  if GetTickCount() - StatsDebugTick > 5000 then
+  begin
+    ClearDebug();
+    WriteLn('+---| STATS |--------------------------------------------------');
+    WriteLn('|- Trips / Drops       : ', BotStats.Trips);
+    WriteLn('|- Ores Mined          : ', BotStats.Count);
+    WriteLn('|- Experience Gained   : ', BotStats.Gains);
+    WriteLn('|- Experience Per Hour : ', Round(BotStats.Gains / (GetTimeRunning()/1000/60/60)) );
+    WriteLn('|- Dismissed Randoms   : ', BotStats.DismissedRandoms);
+    WriteLn('|- Script Runtime      : ', SRL.MsToTime(GetTimeRunning, Time_Formal));
+    WriteLn('+--------------------------------------------------------------');
+    {$IFDEF SMARTDEBUG}
+    Self.DrawProggy();
+    {$ENDIF}
+    StatsDebugTick := GetTickCount();
+  end;
+  AntiBan;
+end;
+
 function TMiner.Contains(R: TRectangle; Colors: array of TCTS2Color): Boolean;
 var
   TPA: TPointArray;
@@ -339,9 +540,10 @@ begin
   invCount := Inventory.Count;
   TRA := Find(self.RockSpots);
 
-  if (not Self.BotStats.Isset_XPPerOre) and (Self.BotStats.XPPerOre = 0) then
+  if (Self.BotStats.StartInfo = []) and (Self.BotStats.XPPerOre = 0) then
   begin
-    Self.BotStats.XPPerOre := Self.GetCurrentXP(False);
+    Self.BotStats.StartInfo := Stats.GetSkillInfo(SKILL_MINING);
+    Self.BotStats.XPPerOre  := BotStats.StartInfo.XP;
   end;
 
   for i:=0 to High(TRA) do
@@ -369,18 +571,18 @@ begin
     while (not T.IsFinished) and Contains(TRA[i], Self.RockColors) do
     begin
       Chatbox.HandleLevelUp();
-      AntiBan;
-      Wait(10);
+      Self.ProcessWhileWaiting();
+      Wait(60);
     end;
 
     if (not Self.BotStats.Isset_XPPerOre) then //XXXXXXXXXXXX
     begin
-      Self.BotStats.XPPerOre := Self.GetCurrentXP(False) - Self.BotStats.XPPerOre;
+      Self.BotStats.XPPerOre := Stats.GetSkillInfo(SKILL_MINING).XP - Self.BotStats.XPPerOre;
       Self.BotStats.Isset_XPPerOre := Self.BotStats.XPPerOre <> 0;
     end;
 
     if (Inventory.Count > invCount) then
-      Inc(Self.BotStats.OreCount);
+      Inc(Self.BotStats.Count);
 
     Exit(True);
   end;
@@ -491,7 +693,7 @@ begin
     if Inventory.IsFull then
     begin
       {$IFDEF SMARTDEBUG}
-      smart.Image.Clear();
+      smart.Image.ClearAllBut(ProggyArea);
       {$ENDIF}
 
       if HasBanking then Self.DoBanking()
@@ -499,23 +701,13 @@ begin
       Inc(BotStats.Trips);
     end;
     {$IFDEF SMARTDEBUG}
-    smart.Image.Clear();
+    smart.Image.ClearAllBut(ProggyArea);
     smart.Image.DrawBox(Self.PlayerBox, False, $666666);
     {$ENDIF}
 
     if Self.DoWork() then
-    begin
-      ClearDebug();
-      WriteLn('+---| STATS |--------------------------------------------------');
-      WriteLn('|- Trips / Drops       : ', BotStats.Trips);
-      WriteLn('|- Ores Mined          : ', BotStats.OreCount);
-      WriteLn('|- Experience Gained   : ', BotStats.OreCount * BotStats.XPPerOre);
-      WriteLn('|- Experience Per Hour : ', Round((BotStats.OreCount * BotStats.XPPerOre) / (GetTimeRunning()/1000/60/60)) );
-      WriteLn('|- Dismissed Randoms   : ', BotStats.DismissedRandoms);
-      WriteLn('|- Script Runtime      : ', SRL.MsToTime(GetTimeRunning, Time_Formal));
-      WriteLn('+--------------------------------------------------------------');
-      Self.AntiBan;
-    end else
+      Self.AntiBan
+    else
       Players.GetCurrent()^.Login();
   until False;
 end;
@@ -529,6 +721,9 @@ begin
   Mouse.Speed := 10;
   Players.GetCurrent()^.Login();
   mainscreen.SetAngle(True);
+
+  BufferImage.Init(client.GetMBitmaps);
+  BufferImage.SetSize(Smart.Image.GetWidth, Smart.Image.GetHeight);
 end;
 
 
