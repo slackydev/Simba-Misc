@@ -21,6 +21,7 @@ const
   CONFIG_FILE = 'config.cfg';
   CONFIG_MAP  = 'map.png';
 
+
 type
   TClickHistory = record
     Data: TRectArray;
@@ -36,6 +37,14 @@ type
     XPPerOre: Int32;
     DismissedRandoms: Int32;
     Isset_XPPerOre: Boolean;
+  end;
+
+  TBreakTimer = record
+    Name: String;
+    Interval: Double;
+    Length: Double;
+    Prev: Double;
+    LogoutChance: Int32;
   end;
 
   TMiner = record
@@ -54,8 +63,18 @@ type
     ClickOrder: TClickHistory;
     ProggyArea: TBox;
     BufferImage: TMufasaBitmap;
+
+    Breaks: array of TBreakTimer;
+
     __RndCalls: Int32;
   end;
+
+
+const
+  ONE_SECOND = 1000;
+  ONE_MINUTE = ONE_SECOND * 60;
+  ONE_HOUR   = ONE_MINUTE * 60;
+  ONE_DAY    = ONE_HOUR   * 24;
 
 
 var
@@ -324,6 +343,12 @@ end;
 // -----------------------------------------------------------------------------
 // MINER
 
+function TMiner.GetTimeRunning(): Int64;
+begin
+  Result := GetTickCount() - Self.StartTime;
+end;
+
+
 procedure TMiner.DrawProggy();
 var
   l: Int32;
@@ -334,7 +359,7 @@ begin
   if (ProggyArea = []) then ProggyArea := [300,9,510,62];
 
   try
-    runtime := GetTimeRunning() div 1000;
+    runtime := GetTimeRunning();
 
     BufferImage.DrawBox(Box(300,9,510,62), True, 5389366);
     BufferImage.SetPixel(300,9,0);  BufferImage.SetPixel(510,9,0);
@@ -347,11 +372,11 @@ begin
       'Lvl: '+ToString(BotStats.CurrLvl+1)      //right-text
     );
 
-    str := ['Uptime: ' + Format('%.2d:%.2d:%.2d', [(runtime div 3600), (runtime div 60) mod 60, runtime mod 60]),
+    str := ['Uptime: ' + srl.MsToTime(runtime, Time_Bare),
             'Exp Gained: '+ srl.FormatNumber(BotStats.Gains,1)];
     BufferImage.DrawTextNL(str, Point(305,36), ProggyFont, $FFFFFF, 0, True, 4);
 
-    str := ['Exp/Hour: ' + srl.FormatNumber(BotStats.Gains / (runtime / 3600),1) ,
+    str := ['Exp/Hour: ' + srl.FormatNumber(BotStats.Gains / (runtime / ONE_HOUR),1) ,
             'Mined: ' + ToStr(BotStats.Count) + ' ores'];
     BufferImage.DrawTextNL(str, Point(410,36), ProggyFont, $FFFFFF, 0, True, 4);
 
@@ -359,11 +384,6 @@ begin
   except
     WriteLn('Error: Something went wrong');
   end;
-end;
-
-function TMiner.GetTimeRunning(): Int64;
-begin
-  Result := GetTickCount() - Self.StartTime;
 end;
 
 
@@ -386,6 +406,35 @@ begin
   Result := (Self.BankColors <> []) and (Self.BankPath <> []) and (Self.BankSpots <> []);
 end;
 
+function TMiner.DoBreak(): Boolean;
+var
+  i,j,PauseLen: Int32;
+begin
+  for i:=0 to High(Breaks) do
+    if GetTimeRunning() > Breaks[i].Prev + Breaks[i].Interval then
+    begin
+      PauseLen := Trunc(Max(ONE_MINUTE, srl.GaussRand(Breaks[i].Length, Breaks[i].Length*0.15)));
+      WriteLn('[RND] Pausing for ', SRL.MsToTime(PauseLen, Time_Formal) + ' ('+Breaks[i].Name+')');
+
+      if (Random(100) < Breaks[i].LogoutChance) then
+      begin
+        Logout.Open();            WaitEx(700,90);
+        Logout.ClickLogout();     WaitEx(700,90);
+        SRL.MouseOffClient();
+      end;
+
+      repeat
+        Wait(Min(PauseLen, ONE_MINUTE));
+        PauseLen -= ONE_MINUTE;
+        WriteLn('[RND] ', SRL.MsToTime(PauseLen, Time_Formal), ' left of the break');
+      until PauseLen < 0;
+
+      for j:=0 to i do
+        Breaks[j].Prev := GetTimeRunning();
+
+      Result := True;
+    end;
+end;
 
 procedure TMiner.AntiBan();
 var
@@ -400,22 +449,22 @@ begin
   if srl.DismissRandom() then
     Inc(Self.BotStats.DismissedRandoms);
 
-  {--|  TASK  |---------}
-  if (24 * 4.0) > Random(Round(CPH * 24)) then {4 per hour}
+  {--|  4 per hour  |---------}
+  if (24 * 5.0) > Random(Round(CPH * 24)) then
   begin
     WriteLn('[RND] Hovering players');
     srl.HoverRandomPlayer();
   end;
 
-  {--|  TASK  |---------}
-  if (24 * 3.0) > Random(Round(CPH * 24)) then {3 per hour}
+  {--|  3 per hour  |---------}
+  if (24 * 3.0) > Random(Round(CPH * 24)) then
   begin
     WriteLn('[RND] Check skill stats');
-    Stats.HoverSkill(SKILL_MINING, srl.GaussRand(2000,170), Random(0,4) > 1);
+    Stats.HoverSkill(SKILL_MINING, srl.GaussRand(2000,170), Random(5) > 1);
   end;
 
-  {--|  TASK  |---------}
-  if (24 * 1.0) > Random(Round(CPH * 24)) then {1 per hour}
+  {--|  1 per hour  |---------}
+  if (24 * 1.0) > Random(Round(CPH * 24)) then
   begin
     WriteLn('[RND] Check overall stats');
     Stats.Open();
@@ -423,54 +472,49 @@ begin
     Inventory.Open();
   end;
 
-  {--|  TASK  |---------}
-  if (24 * 1.0) > Random(Round(CPH * 24)) then {1 per hour}
+  {--|  1 per hour  |---------}
+  if (24 * 1.0) > Random(Round(CPH * 24)) then
   begin
     WriteLn('[RND] Taking a breather');
-    if Random(2)=0 then SRL.MouseOffClient();
+    if(Random(2)=0) then SRL.MouseOffClient();
     WaitEx(45000,3000);
     Players.GetCurrent()^.Login();
     Stats.HoverSkill(SKILL_MINING, srl.GaussRand(2000,170));
   end;
 
-  {--|  TASK  |---------}
-  if (24 * 0.5) > Random(Round(CPH * 24)) then {1 per 2 hours}
+  {--|  1 per 2 hours  |---------}
+  if ((24 * 0.5) > Random(Round(CPH * 24))) then
   begin
     WriteLn('[RND] Doing misc stuff');
     if Random(2) = 0 then
       Gametabs.Open(tabFriends);
 
     WaitEx(3000,200);
-    if Random(0, 9) = 0 then
+    if(Random(8) = 0) then
     begin
-      if Random(2)=0 then SRL.MouseOffClient();
+      if(Random(2) = 0) then SRL.MouseOffClient();
       WaitEx(30000,2200);
     end;
 
-    if Random(0, 9) > 3 then
+    if(Random(4) > 1) then
     begin
-      Stats.HoverSkill(SKILL_MINING, srl.GaussRand(2000,170), Random(0,4) > 1);
+      Stats.HoverSkill(SKILL_MINING, srl.GaussRand(2000,170), Random(5) > 1);
       WaitEx(2500,300);
     end;
   end;
 
-  {--|  TASK  |---------}
-  if (24 * 0.25) > Random(Round(CPH * 24)) then {1 per 4 hours}
+  // ---------------------------------------------------------------------------
+  // Breakhandling
+  if Self.DoBreak() then
   begin
-    PauseLen := Trunc(srl.GaussRand(1000*60*25, 1000*60*5)); //20-30 minutes norm
-    WriteLn('[RND] Pausing for ', SRL.MsToTime(PauseLen, Time_Formal));
-
-    Logout.Open();            WaitEx(700,90);
-    Logout.ClickLogout();     WaitEx(700,90);
-    SRL.MouseOffClient();
-
-    repeat
-      Wait(Min(PauseLen, 1000*60*2));
-      PauseLen -= 1000*60*2;
-      WriteLn('[RND] ', SRL.MsToTime(PauseLen, Time_Formal), ' left of the break');
-    until PauseLen < 0;
+    if Random(3) = 0 then
+    begin
+      Stats.HoverSkill(SKILL_MINING, srl.GaussRand(2000,170), Random(5) > 1);
+      WaitEx(2500,300);
+    end;
   end;
 
+  // if we got logged out
   Players.GetCurrent()^.Login();
 end;
 
@@ -601,7 +645,7 @@ begin
     with ClickOrder.Pop() do
       mouse.Move(Mean, Trunc(Radius));
 
-    T.Init(srl.NormalRange(8500,12000)); //XXXXXXXXXXXX
+    T.Init(srl.NormalRange(20000,25000)); //XXXXXXXXXXXX
     while (not T.IsFinished) and Contains(TRA[i], Self.RockColors) do
     begin
       Chatbox.HandleLevelUp();
@@ -752,6 +796,11 @@ begin
 
   BufferImage.Init(client.GetMBitmaps);
   BufferImage.SetSize(Smart.Image.GetWidth, Smart.Image.GetHeight);
+
+  SetLength(Self.Breaks, 3);
+  Self.Breaks[0] := ['STUFF', ONE_HOUR*(1+Random()*0.3), ONE_MINUTE*(3+Random()),    0, 10];
+  Self.Breaks[1] := ['EAT',   ONE_HOUR*(3+Random()*1.0), ONE_MINUTE*(20+Random()*5), 0, 80];
+  Self.Breaks[2] := ['SLEEP', ONE_HOUR*(8+Random()*1.0), ONE_HOUR*(8+Random()),      0, 90];
 end;
 
 
