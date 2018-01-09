@@ -1,4 +1,4 @@
-program Universal_Miner_V013;
+program Universal_Miner_V014;
 {$DEFINE SMART}
 {$I SRL/OSR.simba}
 {$I RSWalker/Walker.simba}
@@ -10,13 +10,14 @@ program Universal_Miner_V013;
 |   1. For longer runs you need to declare login details bellow
 |   2. Start the script at your mining site, and run setup.
 [==============================================================================}
+type EDropStyle = (dsRegular, dsIntense, dsAdaptive);
 {$DEFINE SMARTDEBUG}
 const
   LOGIN_NAME   = '';
   LOGIN_PASS   = '';
-  RS_WORLD     = 384;   // preferred world
-  SHIFT_DROP   = True;  // use shift to drop
-  INTENSE_DROP = False; // mine some drop some (Often higher XP)
+  RS_WORLD     = 384;         // preferred world
+  SHIFT_DROP   = True;        // use shift to drop
+  INTENSE_DROP = dsAdaptive;  // mine some drop some (Often higher XP)
 
   CONFIG_PATH = IncludePath+'Universal_Miner/';
   CONFIG_FILE = 'config.cfg';
@@ -77,6 +78,8 @@ const
   ONE_HOUR   = ONE_MINUTE * 60;
   ONE_DAY    = ONE_HOUR   * 24;
 
+var
+  INTENSITY_LAST: Double;
 
 var
   Bot: TMiner;
@@ -349,11 +352,40 @@ begin
   Result := GetTickCount() - Self.StartTime;
 end;
 
-function TMiner.ReseedBreaks(UpTo: Int32): Int64;
+function TMiner.TimeSinceBreak(): Int64;
+var i: Int32;
 begin
-  if UpTo >= 0 then Self.Breaks[0] := ['STUFF', ONE_HOUR*(1+Random()*0.3), ONE_MINUTE*(3+Random()),    GetTimeRunning(), 10];
-  if UpTo >= 1 then Self.Breaks[1] := ['EAT',   ONE_HOUR*(3+Random()*1.0), ONE_MINUTE*(20+Random()*5), GetTimeRunning(), 80];
-  if UpTo >= 2 then Self.Breaks[2] := ['SLEEP', ONE_HOUR*(8+Random()*1.0), ONE_HOUR*(8+Random()),      GetTimeRunning(), 90];
+  Result := Self.GetTimeRunning();
+  for i:=0 to High(Self.Breaks) do
+    if(Self.Breaks[i].Prev < Result) then
+      Result := Round(Self.Breaks[i].Prev);
+end;
+
+function TMiner.BreakPower(): Double;
+var
+  i,last: Int32;
+  lastTime, perfect: Double;
+  lastBreak: TBreakTimer;
+begin
+  perfect := Self.Breaks[High(Self.Breaks)].Length;
+  for i:=1 to High(Self.Breaks) do
+    if Self.Breaks[i].Prev <= Self.Breaks[last].Prev then
+      last := i;
+
+  lastBreak := Self.Breaks[last];
+  Result := Power(lastBreak.Length / perfect, 1/3);
+end;
+
+procedure TMiner.ReseedRandom(UpTo: Int32);
+var
+  TimeRunning: Int64;
+begin
+  TimeRunning := Self.GetTimeRunning();
+  if UpTo >= 0 then Self.Breaks[0] := ['STUFF', ONE_HOUR*(1+Random()*0.3), ONE_MINUTE*(3+Random()),    TimeRunning, 10];
+  if UpTo >= 1 then Self.Breaks[1] := ['EAT',   ONE_HOUR*(3+Random()*1.0), ONE_MINUTE*(20+Random()*5), TimeRunning, 80];
+  if UpTo >= 2 then Self.Breaks[2] := ['SLEEP', ONE_HOUR*(8+Random()*1.0), ONE_HOUR*(8+Random()),      TimeRunning, 90];
+
+  INTENSITY_LAST := TimeRunning + Random(25*ONE_MINUTE, 45*ONE_MINUTE) * BreakPower();
 end;
 
 procedure TMiner.DrawProggy();
@@ -436,7 +468,7 @@ begin
         WriteLn('[RND] ', SRL.MsToTime(PauseLen, Time_Formal), ' left of the break');
       until PauseLen < 0;
 
-      Self.ReseedBreaks(i);
+      Self.ReseedRandom(i);
       Exit(True);
     end;
 end;
@@ -745,15 +777,21 @@ procedure TMiner.IntenseDrop(Test: function: Boolean of Object);
 var
   p: TPoint;
   Slots: TIntArray;
+  n: Int32 = 3;
 begin
   if Test() then Exit;
+
+  if Random(5) = 0 then
+    n := Random(2,4);
+
   p := Mouse.GetPosition();
   Slots := Inventory.GetUsedSlots();
   if (Length(Slots) >= 3)then
   begin
     if(not Self.QuickDeposit) then Slots.Remove(0);
-    SetLength(Slots, Min(Length(Slots), Random(2,3)));
-    Inventory.DropItems(Inventory.ErrorPattern(Slots,2));
+
+    SetLength(Slots, Min(Length(Slots), n));
+    Inventory.DropItems(Inventory.ErrorPattern(Slots));
     Mouse.Move(p,20);
   end;
 end;
@@ -801,7 +839,11 @@ begin
 
     if Self.DoWork() then
     begin
-      if INTENSE_DROP then Self.IntenseDrop(@Self.DoWork);
+      if (INTENSE_DROP = dsIntense) then
+        Self.IntenseDrop(@Self.DoWork)
+      else if (INTENSE_DROP = dsAdaptive) and (Self.TimeSinceBreak < INTENSITY_LAST) then
+        Self.IntenseDrop(@Self.DoWork);
+
       Self.AntiBan
     end else
       Players.GetCurrent()^.Login();
@@ -822,7 +864,7 @@ begin
   BufferImage.SetSize(Smart.Image.GetWidth, Smart.Image.GetHeight);
 
   SetLength(Self.Breaks, 3);
-  Self.ReseedBreaks(99);
+  Self.ReseedRandom(99);
 end;
 
 
@@ -1001,10 +1043,10 @@ type
       begin
         TPA := TPAFromText(Result, 'SmallChars07');
         TPA.Offset(pt);
-        smart.Image.DrawBox(GetTPABounds(TPA), True, $FFCCAA);
+        smart.Image.DrawBox(GetTPABounds(TPA), True, $171D20);
         while IsKeyDown2(VK_BACK) do Wait(50);
         SetLength(Result, Length(Result)-1);
-        smart.Image.DrawText(Result, 'SmallChars07', pt, False, 1);
+        smart.Image.DrawText(Result, 'SmallChars07', pt, False, $FFCCAA);
       end;
     until False;
   end;
@@ -1244,7 +1286,6 @@ begin
   srl.Setup([]);
   AddOnTerminate(@smart.Free);
   Inventory.ShiftDrop := SHIFT_DROP;
-
 
   Bot.Init();
   Bot.Setup();
