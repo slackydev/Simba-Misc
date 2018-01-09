@@ -1,4 +1,4 @@
-program Universal_Miner_V014;
+program Universal_Miner_V015;
 {$DEFINE SMART}
 {$I SRL/OSR.simba}
 {$I RSWalker/Walker.simba}
@@ -17,7 +17,7 @@ const
   LOGIN_PASS   = '';
   RS_WORLD     = 384;         // preferred world
   SHIFT_DROP   = True;        // use shift to drop
-  INTENSE_DROP = dsAdaptive;  // mine some drop some (Often higher XP)
+  INTENSE_DROP = dsAdaptive;  // dsIntense, and dsAdaptive = mine some drop some (Often higher XP)
 
   CONFIG_PATH = IncludePath+'Universal_Miner/';
   CONFIG_FILE = 'config.cfg';
@@ -349,16 +349,17 @@ end;
 
 function TMiner.GetTimeRunning(): Int64;
 begin
+  if Self.StartTime = 0 then Exit(0);
   Result := GetTickCount() - Self.StartTime;
 end;
 
-function TMiner.TimeSinceBreak(): Int64;
-var i: Int32;
+function TMiner.TimeSinceBreak(): UInt64;
+var i: UInt64;
 begin
   Result := Self.GetTimeRunning();
   for i:=0 to High(Self.Breaks) do
-    if(Self.Breaks[i].Prev < Result) then
-      Result := Round(Self.Breaks[i].Prev);
+    if(GetTimeRunning()-Self.Breaks[i].Prev < Result) then
+      Result := GetTimeRunning()-Round(Self.Breaks[i].Prev);
 end;
 
 function TMiner.BreakPower(): Double;
@@ -381,11 +382,11 @@ var
   TimeRunning: Int64;
 begin
   TimeRunning := Self.GetTimeRunning();
-  if UpTo >= 0 then Self.Breaks[0] := ['STUFF', ONE_HOUR*(1+Random()*0.3), ONE_MINUTE*(3+Random()),    TimeRunning, 10];
-  if UpTo >= 1 then Self.Breaks[1] := ['EAT',   ONE_HOUR*(3+Random()*1.0), ONE_MINUTE*(20+Random()*5), TimeRunning, 80];
-  if UpTo >= 2 then Self.Breaks[2] := ['SLEEP', ONE_HOUR*(8+Random()*1.0), ONE_HOUR*(8+Random()),      TimeRunning, 90];
+  if UpTo >= 0 then Self.Breaks[0] := ['STUFF', ONE_HOUR*srl.GaussRand(1,0.1), ONE_MINUTE*srl.GaussRand(3,0.1),  TimeRunning, 10];
+  if UpTo >= 1 then Self.Breaks[1] := ['EAT',   ONE_HOUR*srl.GaussRand(3,0.3), ONE_MINUTE*srl.GaussRand(20,5.0), TimeRunning, 80];
+  if UpTo >= 2 then Self.Breaks[2] := ['SLEEP', ONE_HOUR*srl.GaussRand(9,1.0), ONE_HOUR*srl.GaussRand(14,1.0),   TimeRunning, 90];
 
-  INTENSITY_LAST := TimeRunning + Random(25*ONE_MINUTE, 45*ONE_MINUTE) * BreakPower();
+  INTENSITY_LAST := TimeRunning + ONE_MINUTE * srl.GaussRand(25,5) * BreakPower();
 end;
 
 procedure TMiner.DrawProggy();
@@ -395,17 +396,17 @@ var
   str: TStringArray;
   statusText: TPointArray;
 begin
-  if (ProggyArea = []) then ProggyArea := [300,9,510,62];
+  if (ProggyArea = []) then ProggyArea := [290,9,510,62];
 
   try
     runtime := GetTimeRunning();
 
-    BufferImage.DrawBox(Box(300,9,510,62), True, 5389366);
-    BufferImage.SetPixel(300,9,0);  BufferImage.SetPixel(510,9,0);
-    BufferImage.SetPixel(300,62,0); BufferImage.SetPixel(510,62,0);
+    BufferImage.DrawBox(Box(290,9,510,62), True, 5389366);
+    BufferImage.SetPixel(290,9,0);  BufferImage.SetPixel(510,9,0);
+    BufferImage.SetPixel(290,62,0); BufferImage.SetPixel(510,62,0);
 
     BufferImage.DrawPrecentBar(
-      [305,14], 200, 20, BotStats.PrcToNextLvl, //pos, w,h, percent
+      [295,14], 210, 20, BotStats.PrcToNextLvl, //pos, w,h, percent
       2628890,7880503,                          //colors
       'Lvl: '+ToString(BotStats.CurrLvl),       //left-text
       'Lvl: '+ToString(BotStats.CurrLvl+1)      //right-text
@@ -413,11 +414,11 @@ begin
 
     str := ['Uptime: ' + srl.MsToTime(runtime, Time_Bare),
             'Exp Gained: '+ srl.FormatNumber(BotStats.Gains,1)];
-    BufferImage.DrawTextNL(str, Point(305,36), ProggyFont, $FFFFFF, 0, True, 4);
+    BufferImage.DrawTextNL(str, Point(295,36), ProggyFont, $FFFFFF, 0, True, 4);
 
     str := ['Exp/Hour: ' + srl.FormatNumber(BotStats.Gains / (runtime / ONE_HOUR),1) ,
             'Mined: ' + ToStr(BotStats.Count) + ' ores'];
-    BufferImage.DrawTextNL(str, Point(410,36), ProggyFont, $FFFFFF, 0, True, 4);
+    BufferImage.DrawTextNL(str, Point(406,36), ProggyFont, $FFFFFF, 0, True, 4);
 
     BufferImage.DrawTransparent(0,0, Smart.Image);
   except
@@ -578,14 +579,15 @@ begin
   if GetTickCount() - StatsDebugTick > 2000 then
   begin
     ClearDebug();
-    WriteLn('+---| STATS |--------------------------------------------------');
+    WriteLn('+---| STATS |----------------------------------------');
     WriteLn('|- Trips / Drops       : ', BotStats.Trips);
     WriteLn('|- Ores Mined          : ', BotStats.Count);
     WriteLn('|- Experience Gained   : ', BotStats.Gains);
     WriteLn('|- Experience Per Hour : ', Round(BotStats.Gains / (GetTimeRunning()/1000/60/60)) );
     WriteLn('|- Dismissed Randoms   : ', BotStats.DismissedRandoms);
-    WriteLn('|- Script Runtime      : ', SRL.MsToTime(GetTimeRunning, Time_Formal));
-    WriteLn('+--------------------------------------------------------------');
+    WriteLn('|- Time Since Break    : ', SRL.MsToTime(Self.TimeSinceBreak, Time_Short));
+    WriteLn('|- Script Runtime      : ', SRL.MsToTime(GetTimeRunning, Time_Short));
+    WriteLn('+----------------------------------------------------');
 
     {$IFDEF SMARTDEBUG}
     Self.DrawProggy();
@@ -791,7 +793,7 @@ begin
     if(not Self.QuickDeposit) then Slots.Remove(0);
 
     SetLength(Slots, Min(Length(Slots), n));
-    Inventory.DropItems(Inventory.ErrorPattern(Slots));
+    Inventory.DropItems(Inventory.ErrorPattern(Slots,2));
     Mouse.Move(p,20);
   end;
 end;
@@ -834,9 +836,7 @@ begin
 
     {$IFDEF SMARTDEBUG}
     smart.Image.ClearAllBut(ProggyArea);
-    smart.Image.DrawBox(Self.PlayerBox, False, $666666);
     {$ENDIF}
-
     if Self.DoWork() then
     begin
       if (INTENSE_DROP = dsIntense) then
@@ -1289,7 +1289,7 @@ begin
 
   Bot.Init();
   Bot.Setup();
-  Bot.StartTime := GetTickCount;
+  Bot.StartTime := GetTickCount();
 
   RSW.Init(Bot.ConfigPath+CONFIG_MAP,-1);
   RSW.skipClose := 25;
