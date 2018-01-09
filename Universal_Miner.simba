@@ -12,10 +12,11 @@ program Universal_Miner_V013;
 [==============================================================================}
 {$DEFINE SMARTDEBUG}
 const
-  LOGIN_NAME  = '';
-  LOGIN_PASS  = '';
-  RS_WORLD    = 384;
-  SHIFT_DROP  = True;
+  LOGIN_NAME   = '';
+  LOGIN_PASS   = '';
+  RS_WORLD     = 384;   // preferred world
+  SHIFT_DROP   = True;  // use shift to drop
+  INTENSE_DROP = False; // mine some drop some (Often higher XP)
 
   CONFIG_PATH = IncludePath+'Universal_Miner/';
   CONFIG_FILE = 'config.cfg';
@@ -348,6 +349,12 @@ begin
   Result := GetTickCount() - Self.StartTime;
 end;
 
+function TMiner.ReseedBreaks(UpTo: Int32): Int64;
+begin
+  if UpTo >= 0 then Self.Breaks[0] := ['STUFF', ONE_HOUR*(1+Random()*0.3), ONE_MINUTE*(3+Random()),    GetTimeRunning(), 10];
+  if UpTo >= 1 then Self.Breaks[1] := ['EAT',   ONE_HOUR*(3+Random()*1.0), ONE_MINUTE*(20+Random()*5), GetTimeRunning(), 80];
+  if UpTo >= 2 then Self.Breaks[2] := ['SLEEP', ONE_HOUR*(8+Random()*1.0), ONE_HOUR*(8+Random()),      GetTimeRunning(), 90];
+end;
 
 procedure TMiner.DrawProggy();
 var
@@ -429,10 +436,8 @@ begin
         WriteLn('[RND] ', SRL.MsToTime(PauseLen, Time_Formal), ' left of the break');
       until PauseLen < 0;
 
-      for j:=0 to i do
-        Breaks[j].Prev := GetTimeRunning();
-
-      Result := True;
+      Self.ReseedBreaks(i);
+      Exit(True);
     end;
 end;
 
@@ -736,6 +741,23 @@ begin
 end;
 
 
+procedure TMiner.IntenseDrop(Test: function: Boolean of Object);
+var
+  p: TPoint;
+  Slots: TIntArray;
+begin
+  if Test() then Exit;
+  p := Mouse.GetPosition();
+  Slots := Inventory.GetUsedSlots();
+  if (Length(Slots) >= 3)then
+  begin
+    if(not Self.QuickDeposit) then Slots.Remove(0);
+    SetLength(Slots, Min(Length(Slots), Random(2,3)));
+    Inventory.DropItems(Inventory.ErrorPattern(Slots,2));
+    Mouse.Move(p,20);
+  end;
+end;
+
 procedure TMiner.DropInventory();
 begin
   if Self.QuickDeposit then
@@ -778,8 +800,10 @@ begin
     {$ENDIF}
 
     if Self.DoWork() then
+    begin
+      if INTENSE_DROP then Self.IntenseDrop(@Self.DoWork);
       Self.AntiBan
-    else
+    end else
       Players.GetCurrent()^.Login();
   until False;
 end;
@@ -798,9 +822,7 @@ begin
   BufferImage.SetSize(Smart.Image.GetWidth, Smart.Image.GetHeight);
 
   SetLength(Self.Breaks, 3);
-  Self.Breaks[0] := ['STUFF', ONE_HOUR*(1+Random()*0.3), ONE_MINUTE*(3+Random()),    0, 10];
-  Self.Breaks[1] := ['EAT',   ONE_HOUR*(3+Random()*1.0), ONE_MINUTE*(20+Random()*5), 0, 80];
-  Self.Breaks[2] := ['SLEEP', ONE_HOUR*(8+Random()*1.0), ONE_HOUR*(8+Random()),      0, 90];
+  Self.ReseedBreaks(99);
 end;
 
 
