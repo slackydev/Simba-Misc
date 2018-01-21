@@ -1,0 +1,806 @@
+program Universal_Miner_V020;
+{$DEFINE RSCLIENT}
+{$I SRL/OSR.simba}
+{$I RSWalker/Walker.simba}
+{$H-}{$R+}{$X+}
+{==============================================================================]
+| Universal Miner ™
+|
+| Steps to use:
+|   1. For longer runs you need to declare login details bellow
+|   2. Start the script at your min.ing site, and run setup.
+[==============================================================================}
+type EDropStyle = (dsRegular, dsIntense, dsAdaptive);
+{$DEFINE SMARTDEBUG}
+const
+  LOGIN_NAME   = '';
+  LOGIN_PASS   = '';
+  RS_WORLD     = 308;         // preferred world
+  SHIFT_DROP   = True;        // use shift to drop
+  INTENSE_DROP = dsRegular;   // dsIntense, and dsAdaptive = mine some drop some (Often higher XP)
+
+  CONFIG_PATH = IncludePath+'Universal_Miner/';
+  CONFIG_FILE = 'config.cfg';
+  CONFIG_MAP  = 'map.png';
+
+type
+  TClickHistory = record
+    Data: TRectArray;
+  end;
+
+  TStatistics = record
+    Trips: Int32;
+    StartInfo: TSkillInfo;
+    CurrLvl: Int32;
+    Count: Int32;
+    PrcToNextLvl: Int32;
+    Gains,Rem,CurrXP:Double;
+    XPPerOre: Int32;
+    DismissedRandoms: Int32;
+    Isset_XPPerOre: Boolean;
+  end;
+
+  TBreakTimer = record
+    Name: String;
+    Interval: Double;
+    Length: Double;
+    Prev: Double;
+    LogoutChance: Int32;
+  end;
+
+  TMiner = record
+    PlayerBox: TBox;
+    ConfigPath: String;
+
+    StartTime: Int64;
+    EnergyLevel: Double;
+    QuickDeposit: Boolean;
+    BotStats: TStatistics;
+    StatsDebugTick: Int64;
+
+    RockSpots,  BankSpots: TPointArray;
+    RockColors, BankColors: array of TCTS2Color;
+    BankPath: TPointArray;
+
+    ClickOrder: TClickHistory;
+    ProggyArea: TBox;
+    BufferImage: TMufasaBitmap;
+
+    Breaks: array of TBreakTimer;
+    Notes: TStringArray;
+
+    __RndCalls: Int32;
+  end;
+
+const
+  ONE_SECOND = 1000;
+  ONE_MINUTE = ONE_SECOND * 60;
+  ONE_HOUR   = ONE_MINUTE * 60;
+  ONE_DAY    = ONE_HOUR   * 24;
+
+var
+  INTENSITY_LEVEL: Double;
+  CHANCE_OF_MISS = 1;
+
+var
+  Bot: TMiner;
+  RSW: TRSWalker;
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// UTILITY FUNCTIONS
+
+function StrToTPA(s:String): TPointArray;
+var
+  i: Int32;
+  Arr: TExtArray;
+begin
+  Arr := s.ExtractNumbers();
+  SetLength(Result, Length(Arr) div 2);
+  for i:=0 to High(Result) do
+  begin
+    Result[i].x := Trunc(Arr[i*2]);
+    Result[i].y := Trunc(Arr[i*2+1]);
+  end;
+end;
+
+function StrToCTS2(s:String): array of TCTS2Color;
+var
+  i: Int32;
+  Arr: TExtArray;
+begin
+  Arr := s.ExtractNumbers();
+  SetLength(Result, Length(Arr) div 4);
+  for i:=0 to High(Result) do
+  begin
+    Result[i].Color     := Trunc(Arr[i*4]);
+    Result[i].Tolerance := Trunc(Arr[i*4+1]);
+    Result[i].HueMod    := Arr[i*4+2];
+    Result[i].SatMod    := Arr[i*4+3];
+  end;
+end;
+
+procedure TMouse.Move(P: TPoint); override;
+var
+  dist: Double;
+  q: TPoint;
+  maxSpeed := Random(20,22);
+  minSpeed := Random(4,6);
+begin
+  q := Self.GetPosition;
+  dist := Hypot(q.x-p.x, q.y-p.y);
+  self.Speed := Trunc(minSpeed + (maxSpeed-minSpeed) * Power(dist / 1000, 1/2));
+  inherited;
+end;
+
+procedure DebugNote(s: String);
+begin
+  Bot.Notes += '['+FormatDateTime('hh:mm:ss', Now())+'] ' + s;
+  WriteLn(Bot.Notes[High(Bot.Notes)]);
+end;
+
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// MISC BOT FUNCTIONS
+
+function WorldToMSTile(Me, ObjLoc: TPoint; Height:Double=0; Offx,Offy:Double=0): TRectangle;
+var
+  Angle: Double;
+begin
+  ObjLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (ObjLoc - Me);
+  Angle  := Minimap.GetCompassAngle(False);
+  ObjLoc := ObjLoc.Rotate(Angle, Point(MM2MS.MMCX, MM2MS.MMCY));
+  Result := Minimap.VecToMSRect(Vec3(ObjLoc.x - offx, ObjLoc.y - offy, Height), Angle);
+end;
+
+procedure TClickHistory.Push(x: TRectangle);
+begin
+  Insert(x, Self.Data, 0);
+end;
+
+function TClickHistory.Pop(): TRectangle;
+begin
+  if Length(Self.Data) < Length(Bot.RockSpots)  then
+    Exit(Self.Data[High(Self.Data)]);
+  Result := Self.Data[High(Self.Data)];
+  SetLength(Self.Data, High(Self.Data));
+end;
+
+procedure WaitFatigue(t: Double; Exp: Double=0.2);
+begin
+  System.Wait(Trunc(2*t * (1-Power(System.Max(0.0001, Bot.EnergyLevel/100),Exp))));
+end;
+
+// overrides for fatigue;
+procedure Wait(min, max:Double; weight:EWaitDir=wdMean); override;
+var t:Double;
+begin
+  t := PerformanceTimer();
+  inherited;
+  WaitFatigue(PerformanceTimer()-t,0.2);
+end;
+
+procedure WaitEx(mean, dev:Double); override;
+var t:Double;
+begin
+  t := PerformanceTimer();
+  inherited;
+  WaitFatigue(PerformanceTimer()-t, 0.2);
+end;
+
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// MINER
+
+function TMiner.GetTimeRunning(): Int64;
+begin
+  if Self.StartTime = 0 then Exit(0);
+  Result := GetTickCount() - Self.StartTime;
+end;
+
+function TMiner.TimeSinceBreak(): UInt64;
+var i: UInt64;
+begin
+  Result := Self.GetTimeRunning();
+  for i:=0 to High(Self.Breaks) do
+    if(GetTimeRunning()-Self.Breaks[i].Prev < Result) then
+      Result := GetTimeRunning()-Round(Self.Breaks[i].Prev);
+end;
+
+function TMiner.BreakPower(): Double;
+var
+  i,last: Int32;
+  lastTime, perfect: Double;
+  lastBreak: TBreakTimer;
+begin
+  perfect := Self.Breaks[High(Self.Breaks)].Length;
+  for i:=1 to High(Self.Breaks) do
+    if Self.Breaks[i].Prev <= Self.Breaks[last].Prev then
+      last := i;
+
+  lastBreak := Self.Breaks[last];
+  Result := Power(lastBreak.Length / perfect, 1/2);
+end;
+
+procedure TMiner.ReseedRandom(UpTo: Int32);
+var
+  TimeRunning: Int64;
+begin
+  TimeRunning := Self.GetTimeRunning();
+  if UpTo >= 0 then Self.Breaks[0] := ['STUFF', ONE_HOUR*srl.GaussRand(1,0.1), ONE_MINUTE*srl.GaussRand(4,0.1),  TimeRunning, 10];
+  if UpTo >= 1 then Self.Breaks[1] := ['EAT',   ONE_HOUR*srl.GaussRand(3,0.3), ONE_MINUTE*srl.GaussRand(20,5.0), TimeRunning, 80];
+  if UpTo >= 2 then Self.Breaks[2] := ['SLEEP', ONE_HOUR*srl.GaussRand(9,1.0), ONE_HOUR*srl.GaussRand(14,1.0),   TimeRunning, 90];
+
+  INTENSITY_LEVEL := Random(50,80);
+  Self.EnergyLevel := 100 * BreakPower();
+end;
+
+
+procedure TMiner.DeclarePlayers();
+begin
+  with Players.New()^ do
+  begin
+    LoginName := LOGIN_NAME;
+    Password  := LOGIN_PASS;
+    IsActive  := True;
+    IsMember  := False;
+    World     := RS_WORLD;
+  end;
+  Players.SetCurrent(0);
+end;
+
+
+function TMiner.HasBanking(): Boolean;
+begin
+  Result := (Self.BankColors <> []) and (Self.BankPath <> []) and (Self.BankSpots <> []);
+end;
+
+function TMiner.DoBreak(ForceNearest: Boolean): Boolean;
+var
+  i,j,PauseLen: Int32;
+begin
+  for i:=0 to High(Breaks) do
+    if GetTimeRunning() > Breaks[i].Prev + Breaks[i].Interval then
+    begin
+      PauseLen := Trunc(Max(ONE_MINUTE, srl.GaussRand(Breaks[i].Length, Breaks[i].Length*0.15)));
+      DebugNote('[RND] Pausing for '+ ToStr(SRL.MsToTime(PauseLen, Time_Formal)) + ' ('+Breaks[i].Name+')');
+
+      if (Random(100) < Breaks[i].LogoutChance) then
+      begin
+        Logout.Open();            WaitEx(700,90);
+        Logout.ClickLogout();     WaitEx(700,90);
+        RSClient.LoseFocus();
+      end;
+
+      repeat
+        Wait(Min(PauseLen, ONE_MINUTE));
+        PauseLen -= ONE_MINUTE;
+        DebugNote('[RND] '+ ToStr(SRL.MsToTime(PauseLen, Time_Formal)) + ' left of the break');
+      until PauseLen < 0;
+
+      Self.ReseedRandom(i);
+      Exit(True);
+    end;
+end;
+
+procedure TMiner.AntiBan();
+var
+  CPH: Double;
+  PauseLen: Int32;
+  Counter: TCountDown;
+  SkillInfo: TSkillInfo;
+begin
+  Inc(__RndCalls);
+  CPH := Max(10, __RndCalls / (GetTimeRunning() / (1000*60*60)));
+
+  if srl.DismissRandom() then
+    Inc(Self.BotStats.DismissedRandoms);
+
+  {--|  10 per hour  |---------}
+  if (24 * 10) > Random(Round(CPH * 24)) then
+  begin
+    DebugNote('[RND] Losing focus');
+    RSClient.LoseFocus();
+    WaitEx(25000,2000);
+    RSClient.SetFocus();
+    Players.GetCurrent()^.Login();
+    if Random(4)=0 then Stats.HoverSkill(SKILL_MINING, srl.GaussRand(3000,400));
+  end;
+
+  {--|  7 per hour  |---------}
+  if (24 * 7.0) > Random(Round(CPH * 24)) then
+  begin
+    DebugNote('[RND] Hovering players');
+    srl.HoverRandomPlayer(20);
+  end;
+
+  {--|  5 per hour  |---------}
+  if (24 * 5.0) > Random(Round(CPH * 24)) then
+  begin
+    DebugNote('[RND] Check skill stats');
+    Stats.HoverSkill(SKILL_MINING, srl.GaussRand(3000,400), Random(5) > 1);
+  end;
+
+  {--|  3 per hour  |---------}
+  if (24 * 3) > Random(Round(CPH * 24)) then
+  begin
+    case Random(3) of
+      0: begin
+          DebugNote('[RND] Check overall stats');
+          Stats.Open();
+          WaitEx(5000,400);
+          Inventory.Open();
+         end;
+      1: Minimap.RandomCompass(-180,180, Random(5)=0);
+      3: begin
+           Gametabs.Open(EGametab(Random(High(Gametabs.Tabs))));
+           WaitEx(1000,100);
+         end;
+    end;
+  end;
+
+  {--|  3 per hour  |---------}
+  if (24 * 3) > Random(Round(CPH * 24)) then
+  begin
+    DebugNote('[RND] Taking a breather');
+    if(Random(2)=0) then RSClient.LoseFocus();
+    WaitEx(45000,5000);
+    RSClient.SetFocus();
+    Players.GetCurrent()^.Login();
+    Stats.HoverSkill(SKILL_MINING, srl.GaussRand(3000,400));
+  end;
+
+  {--|  1 per hour  |---------}
+  if ((24 * 1) > Random(Round(CPH * 24))) then
+  begin
+    DebugNote('[RND] Doing misc stuff');
+    if Random(2) = 0 then
+      Gametabs.Open(EGametab(Random(High(Gametabs.Tabs))));
+
+    WaitEx(3000,200);
+    if(Random(8) = 0) then
+    begin
+      if(Random(2) = 0) then RSClient.LoseFocus();
+      WaitEx(30000,2200);
+      RSClient.SetFocus();
+    end;
+
+    if(Random(4) > 1) then
+    begin
+      Stats.HoverSkill(SKILL_MINING, srl.GaussRand(3000,400), Random(5) > 1);
+      WaitEx(2500,300);
+    end;
+  end;
+
+  // ---------------------------------------------------------------------------
+  // Breakhandling
+  if Self.DoBreak(False) then
+  begin
+    if Random(3) = 0 then
+    begin
+      Stats.HoverSkill(SKILL_MINING, srl.GaussRand(3000,400), Random(5) > 1);
+      WaitEx(2500,500);
+    end;
+  end;
+
+  // if we got logged out
+  Players.GetCurrent()^.Login();
+end;
+
+
+procedure TMiner.PostAction(DoAntiban: Boolean = True);
+begin
+  WaitEx(500,70);
+  if DoAntiban then AntiBan;
+end;
+
+
+procedure TMiner.ProcessWhileWaiting();
+var
+  n,atNextLvl,atCurrLvl:Int32;
+begin
+  BotStats.Gains := BotStats.count * BotStats.XPPerOre;
+  BotStats.CurrXP  := BotStats.StartInfo.XP + BotStats.Gains;
+  BotStats.CurrLvl := srl.GetLevelAtXP(Ceil(BotStats.CurrXP));
+  atNextLvl := srl.GetXPAtLevel(BotStats.CurrLvl+1);
+  atCurrLvl := srl.GetXPAtLevel(BotStats.CurrLvl);
+  BotStats.Rem := atNextLvl - BotStats.CurrXP;
+  BotStats.PrcToNextLvl := 100 - Round((BotStats.Rem / (atNextLvl - atCurrLvl)) * 100);
+
+  if GetTickCount() - StatsDebugTick > 2000 then
+  begin
+    ClearDebug();
+    WriteLn(Implode(#13#10, Notes));
+    WriteLn('+---| STATS |----------------------------------------');
+    WriteLn('|- Trips / Drops       : ', BotStats.Trips);
+    WriteLn('|- Ores Mined          : ', BotStats.Count);
+    WriteLn('|- Experience Gained   : ', BotStats.Gains);
+    WriteLn('|- Experience Per Hour : ', Round(BotStats.Gains / (GetTimeRunning()/1000/60/60)) );
+    WriteLn('|- Dismissed Randoms   : ', BotStats.DismissedRandoms);
+    WriteLn('|- Time Since Break    : ', SRL.MsToTime(Self.TimeSinceBreak, Time_Short));
+    WriteLn('|- Energy Level        : ', Self.EnergyLevel);
+    WriteLn('|- Script Runtime      : ', SRL.MsToTime(GetTimeRunning, Time_Short));
+    WriteLn('+----------------------------------------------------');
+
+    StatsDebugTick := GetTickCount();
+  end;
+  AntiBan;
+end;
+
+
+function TMiner.Contains(R: TRectangle; Colors: array of TCTS2Color): Boolean;
+var
+  TPA: TPointArray;
+  i, count: Int32;
+begin
+  for i:=0 to High(Colors) do
+  begin
+    count += srl.FindColors(TPA, Colors[i], R.Bounds);
+    if count > 100 then  //XXXXXXXXXXXX
+      Exit(True);
+  end;
+end;
+
+
+function TMiner.Find(Locations: TPointArray): TRectArray;
+var
+  i: Int32;
+  me: TPoint;
+  rect: TRectangle;
+begin
+  me := RSW.GetMyPos();
+  for i:=0 to High(Locations) do
+  begin
+    rect := WorldToMSTile(me, Locations[i], 0,0,0).Expand(-2);
+    if MainScreen.GetBounds.Contains(rect.Bounds) then
+      Result += rect;
+  end;
+
+  if Length(Result) = 0 then
+    TerminateScript('Not close enough to objects: ('+ ToStr(me.x) +','+ToStr(me.y)+') -> '+ ToStr(locations));
+end;
+
+
+function TMiner.DoWork(): Boolean;
+var
+  i,next: Int32;
+  T: TCountDown;
+  TRA: TRectArray;
+  tmpCurrXP, invCount: Int32;
+
+  function MaybeMiss(): Boolean;
+  var
+    R: TRectangle;
+  begin
+    Result := True;
+    if Random()*100 <= CHANCE_OF_MISS then
+    begin
+      R := Minimap.PointToMsRect(Point(MM2MS.MMCX+Random(-6,6), MM2MS.MMCY+Random(-6,6)));
+      Mouse.Move(R.Mean, Trunc(R.Radius), True);
+      WaitEx(65,10);
+      if MainScreen.IsUpText(['Walk here', 'Mine', 'Rocks']) then
+        Exit();
+      Result := False;
+    end;
+  end;
+
+  function ClickRock(rect: TRectangle): Int8;
+  begin
+    mouse.Move(TRA[i].Mean, Trunc(TRA[i].Radius), Random(10) = 0);
+    WaitEx(65,10);
+    if not Mainscreen.IsUpText(['Mine', 'Rocks']) then
+      Exit(1);
+
+    if (not MaybeMiss()) then
+      Exit(0);
+
+    if (not ((Random()*100 <= 5) and ChooseOption.Select('Mine Rocks'))) and
+       (not Mouse.Click(ctRed)) then
+    begin
+      Wait(500,6000,wdLeft);
+      AntiBan();
+      WaitFatigue(Random(1000,4500), 0.6);
+      Exit(0);
+    end;
+
+    for 6 to Round(srl.TruncatedGauss(0,12)) do
+    begin
+      Mouse.Click(mouse_Left);
+      WaitEx(70,10);
+    end;
+
+    WaitEx(500,70);
+    ClickOrder.Push(TRA[i]);
+    Result := 2;
+  end;
+
+begin
+  invCount := Inventory.Count;
+  TRA := Find(self.RockSpots);
+
+  if (Self.BotStats.StartInfo = []) and (Self.BotStats.XPPerOre = 0) then
+  begin
+    Self.BotStats.StartInfo := Stats.GetSkillInfo(SKILL_MINING);
+    Self.BotStats.XPPerOre  := BotStats.StartInfo.XP;
+  end;
+
+  for i:=0 to High(TRA) do
+  begin
+    if not Contains(TRA[i], Self.RockColors) then
+      Continue;
+
+    WaitFatigue(Random(700,1200), 0.1);
+    case ClickRock(TRA[i]) of
+      0: Exit;
+      1: Continue;
+      2: Minimap.WaitPlayerMoving(False);
+    end;
+
+    TRA := Find(self.RockSpots); // update the TRA in case we moved
+
+    if (Self.EnergyLevel > INTENSITY_LEVEL) or (Random() < 0.05) then
+    begin
+      if(Random() < Self.BreakPower) then
+      begin
+        with ClickOrder.Pop() do
+          Mouse.Move(Mean, Trunc(Radius))
+      end
+      else if(Random() < 0.05) then
+         Mouse.Move(srl.DefaultClientBounds, True, rndRandom);
+    end;
+
+    T.Init(srl.NormalRange(20000,25000)); //XXXXXXXXXXXX
+    while (not T.IsFinished) and Contains(TRA[i], Self.RockColors) do
+    begin
+      if(Chatbox.GotLevelUp()) then
+        if(Random(9) = 0) then
+          Chatbox.HandleLevelUp()
+        else
+          Break;
+
+      if 'inventory is too full' in Chatbox.GetNotification() then
+        Break;
+
+      Self.ProcessWhileWaiting();
+      WaitEx(30,5);
+    end;
+
+    if (Inventory.Count > invCount) then
+    begin
+      Inc(Self.BotStats.Count);
+
+      if (not Self.BotStats.Isset_XPPerOre) then //XXXXXXXXXXXX
+      begin
+        Self.BotStats.XPPerOre := Stats.GetSkillInfo(SKILL_MINING).XP - Self.BotStats.XPPerOre;
+        Self.BotStats.Isset_XPPerOre := Self.BotStats.XPPerOre <> 0;
+      end;
+    end;
+
+    Exit(True);
+  end;
+end;
+
+
+procedure TMiner.DoBanking();
+  function OpenBank(): Boolean;
+  var Rect: TRectangle;
+  begin
+    for 0 to 3 do
+    begin
+      for Rect in Find(self.BankSpots) do
+        if Contains(Rect, Self.BankColors) and
+           BankScreen.OpenAt(srl.RandomPoint(Rect.Mean, Trunc(Rect.Radius))) then
+          Exit(True);
+      Wait(800,1300);
+    end;
+  end;
+
+  function BankInventory(): Boolean;
+  var
+    slots: TIntArray;
+    t: TCountDown;
+  begin
+    if Self.QuickDeposit then
+      Exit(BankScreen.DepositAll);
+
+    slots := Inventory.GetUsedSlots();
+    slots.Remove(0); //reserved
+    while Length(slots) > 0 do
+    begin
+      Inventory.MouseSlot(slots[0]);
+      ChooseOption.Select('Deposit-All');
+      t.Init(2000);
+      while Inventory.IsSlotUsed(slots[0]) and (not t.IsFinished) do
+        WaitEx(90,10);
+
+      slots := Inventory.GetUsedSlots();
+      slots.Remove(0);
+    end;
+    Wait(1, 1200, wdLeft);
+    Result := not Inventory.IsFull();
+
+    if Inventory.Count = 0 then
+      Self.QuickDeposit := True;
+  end;
+
+  function Walk(path: TPointArray): Boolean;
+  begin
+    for 0 to 2 do
+      if RSW.WalkPath(Path) then
+        Exit(True)
+      else
+        Wait(800, 3200, wdRight);
+  end;
+
+begin
+  if(not Walk(self.BankPath)) then
+    TerminateScript('Failed to walk path [1]');
+  AntiBan;
+
+  if(not OpenBank()) then
+    TerminateScript('Failed to open bank');
+  PostAction(False);
+
+  if(not BankInventory()) then
+    TerminateScript('Failed to deposit items');
+  PostAction;
+
+  if(not Walk(self.BankPath.Reversed)) then
+    TerminateScript('Failed to walk path [2]');
+  AntiBan;
+end;
+
+
+procedure TMiner.IntenseDrop(Test: function: Boolean of Object);
+var
+  p: TPoint;
+  Slots: TIntArray;
+  n: Int32 = 3;
+begin
+  if Test() then Exit;
+
+  if Random(5) = 0 then
+    n := Random(2,4);
+
+  p := Mouse.GetPosition();
+  Slots := Inventory.GetUsedSlots();
+  if (Length(Slots) >= 3)then
+  begin
+    if(not Self.QuickDeposit) then Slots.Remove(0);
+
+    SetLength(Slots, Min(Length(Slots), n));
+    Inventory.DropItems(Inventory.ErrorPattern(Slots,2));
+    Mouse.Move(p,20);
+  end;
+end;
+
+procedure TMiner.DropInventory();
+begin
+  if Self.QuickDeposit then
+    Inventory.DropItems(Inventory.ErrorPattern())
+  else
+    Inventory.DropItemsExcept([0], Inventory.ErrorPattern());
+end;
+
+
+procedure TMiner.Run();
+var
+  loc: TPoint;
+  tick: UInt64;
+
+  procedure TryDropWhileMining();
+  begin
+    if (not HasBanking) and (INTENSE_DROP in [dsIntense,dsAdaptive])  then
+    begin
+      if (INTENSE_DROP = dsIntense) then
+        Self.IntenseDrop(@Self.DoWork)
+      else if (INTENSE_DROP = dsAdaptive) and (Self.EnergyLevel > INTENSITY_LEVEL) then
+      begin
+        Self.IntenseDrop(@Self.DoWork);
+        Self.EnergyLevel -= 0.05;
+        Self.EnergyLevel := Max(1,Self.EnergyLevel);
+      end;
+    end;
+  end;
+
+begin
+  Bot.StartTime := GetTickCount();
+
+  if Self.HasBanking() then
+  begin
+    loc := RSW.GetMyPos();
+    if (Distance(loc, self.BankPath[high(self.BankPath)]) < Distance(loc, self.BankPath[0])) and
+       (not RSW.WalkPath(self.BankPath.Reversed)) then
+      TerminateScript('Failed to walk from bank on startup');
+  end;
+
+  if Inventory.Count = 0 then
+    Self.QuickDeposit := True;
+
+  repeat
+    if (Random(5000) <> 0) and Inventory.IsFull() then
+    begin
+      if HasBanking then Self.DoBanking()
+      else               Self.DropInventory();
+      Inc(BotStats.Trips);
+    end;
+
+    if Self.DoWork() then
+    begin
+      TryDropWhileMining();
+      Self.AntiBan;
+    end else
+      Players.GetCurrent()^.Login();
+
+    if Self.GetTimeRunning() > tick then
+    begin
+      Self.EnergyLevel -= 1;
+      Self.EnergyLevel := Max(1,Self.EnergyLevel);
+      tick := Self.GetTimeRunning() + Random(ONE_MINUTE div 2, ONE_MINUTE + ONE_MINUTE div 2);
+    end;
+    Wait(1);
+  until False;
+end;
+
+
+procedure TMiner.Init();
+var
+  W, H: Integer;
+begin
+  GetClientDimensions(W, H);
+
+  self.PlayerBox := Minimap.VecToMsRect(Vec3(MM2MS.MMCX,MM2MS.MMCY,2)).Expand(7).Bounds;
+  self.DeclarePlayers();
+
+  Mouse.Speed := 10;
+  Players.GetCurrent()^.Login();
+  mainscreen.SetAngle(True);
+
+  SetLength(Self.Breaks, 3);
+  Self.ReseedRandom(99);
+
+  Self.EnergyLevel := Random(90,100);
+end;
+
+procedure TMiner.Setup();
+  function LoadConfig(): Boolean;
+  begin
+    if not FileExists(ConfigPath+CONFIG_FILE) then
+      Exit(False);
+
+    BankPath   := StrToTPA (ReadINI('settings', 'BankPath',   ConfigPath+CONFIG_FILE));
+    RockSpots  := StrToTPA (ReadINI('settings', 'RockSpots',  ConfigPath+CONFIG_FILE));
+    RockColors := StrToCTS2(ReadINI('settings', 'RockColors', ConfigPath+CONFIG_FILE));
+    BankSpots  := StrToTPA (ReadINI('settings', 'BankSpots',  ConfigPath+CONFIG_FILE));
+    BankColors := StrToCTS2(ReadINI('settings', 'BankColors', ConfigPath+CONFIG_FILE));
+    Result := True;
+  end;
+begin
+  InputQuery('Load config','Name of config', Self.ConfigPath);
+  Self.ConfigPath := CONFIG_PATH + Self.ConfigPath + '/';
+
+  if not LoadConfig() then
+    RaiseException('Unknown config');
+end;
+
+
+begin
+  srl.SetupForClient('',[]);
+
+  Inventory.ShiftDrop := SHIFT_DROP;
+
+  Bot.Init();
+  Bot.Setup();
+  RSClient.SetFocus();
+
+  RSW.Init(Bot.ConfigPath+CONFIG_MAP);
+  RSW.skipClose := 25;
+  RSW.walkStyle := wsSPS;
+  RSW.minRunEnergy := 35;
+  AddOnTerminate(@RSW.Free);
+
+  Bot.Run();
+end.
+
