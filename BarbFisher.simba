@@ -137,14 +137,13 @@ end;
 function TFisher.FindFishingSpot(scanTime: Int32=450): T2DPointArray;
 var
   i: Int32;
-  SUM,TMP,TPA: TPointArray;
+  SUM, TPA: TPointArray;
   R: TRectangle;
   t: TCountDown;
 begin
   t.Init(scanTime);
   while not t.IsFinished do
   begin
-    SetLength(TMP, 0);
     srl.FindColors(TPA, CTS2(8875103,16,0.2,0.7), Mainscreen.GetBounds);
     SUM += TPA.Edges();
   end;
