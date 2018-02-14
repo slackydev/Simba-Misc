@@ -1,4 +1,4 @@
-program AlSmelter_V001;
+program AlSmelter_V002;
 {$I SRL/OSR.simba}
 {$I SRL/utils/rsclient.simba}
 {$I SRL/utils/rsclient_overrides.simba}
@@ -377,7 +377,7 @@ procedure TSmelter.DoBanking();
         if Contains(Rect, Self.BankColors) and
            BankScreen.OpenAt(srl.RandomPoint(rect.Expand(-6))) then
           Exit(True);
-      Minimap.SetCompassAngle_Key([0,90,180,270][Random(4)]+Random(-15,15));
+      Minimap.SetCompassAngle([0,90,180,270][Random(4)]+Random(-15,15));
       Wait(800,1300);
     end;
   end;

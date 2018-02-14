@@ -272,7 +272,7 @@ begin
         if not ChooseOption.Select('Fire') then
         begin
           Wait(300,600);
-          Minimap.SetCompassAngle_Key([0,90,180,270][Random(4)]+Random(-15,15));
+          Minimap.SetCompassAngle([0,90,180,270][Random(4)]+Random(-15,15));
           Continue;
         end
       end else
