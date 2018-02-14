@@ -1,0 +1,499 @@
+program AlSmelter_V001;
+{$I SRL/OSR.simba}
+{$I SRL/utils/rsclient.simba}
+{$I SRL/utils/rsclient_overrides.simba}
+{$I SRL/utils/itemfinder.simba}
+{$I RSWalker/Walker.simba}
+{$H-}{$X+}
+{==============================================================================]
+| AlKharid Smelter ™
+|
+| Steps to use:
+|   1. For longer runs you need to declare login details bellow
+|   2. Start the script wherever
+[==============================================================================} 
+const
+  LOGIN_NAME   = '';
+  LOGIN_PASS   = '';
+  RS_WORLD     = -1;         // preferred world, -1 = random world
+  IS_MEMBER    = FALSE;      // TRUE or FALSE
+  
+  ORE_NAMES = ['Iron ore'];
+  ORE_RATIO = [28];         // For example [14,14]
+  BAR_NAME  = 'Iron bar';
+  MAKE_ID   = 2;
+
+
+type
+  TStatistics = record
+    Count: Int32;
+    StartInfo: TSkillInfo;
+    PrcToNextLvl, Rem, CurrLvl, CurrXP, Gains, XPPerBar: Double;
+    DismissedRandoms: Int32;
+  end;
+
+  TBreakTimer = record
+    Name: String;
+    Interval: Double;
+    Length: Double;
+    Prev: Double;
+    LogoutChance: Int32;
+  end;
+
+  TSmelter = record
+    PlayerBox: TBox;
+
+    StartTime: Int64;
+    EnergyLevel: Double;
+    BotStats: TStatistics;
+    StatsDebugTick: Int64;
+
+    FurnaceSpot: TPoint;
+    FurnaceColors: array of TCTS2Color;
+
+    BankSpots: TPointArray;
+    BankColors: array of TCTS2Color;
+
+    BankPath: TPointArray;
+
+    Breaks: array of TBreakTimer;
+    Antiban: TAntiban;
+
+    __RndCalls: Int32;
+  end;
+
+var
+  Bot: TSmelter;
+  RSW: TRSWalker;
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// UTILITY FUNCTIONS
+
+function GetTimeRunning(): UInt32; override;
+begin
+  if Bot.StartTime = 0 then Exit(0);
+  Result := GetTickCount() - Bot.StartTime;
+end;
+
+procedure TMouse.Move(P: TPoint); override;
+var
+  dist: Double;
+  q: TPoint;
+  maxSpeed := Random(20,22);
+  minSpeed := Random(4,6);
+begin
+  q := Self.GetPosition;
+  dist := Hypot(q.x-p.x, q.y-p.y);
+  self.Speed := Trunc(minSpeed + (maxSpeed-minSpeed) * Power(dist / 1000, 1/2));
+  inherited;
+end;
+
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// MISC BOT FUNCTIONS
+
+function WorldToMSTile(Me, ObjLoc: TPoint; Height:Double=0; Offx,Offy:Double=0): TRectangle;
+var
+  Angle: Double;
+begin
+  ObjLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (ObjLoc - Me);
+  Angle  := Minimap.GetCompassAngle(False);
+  ObjLoc := ObjLoc.Rotate(Angle, Point(MM2MS.MMCX, MM2MS.MMCY));
+  Result := Minimap.VecToMSRect(Vec3(ObjLoc.x - offx, ObjLoc.y - offy, Height), Angle);
+end;
+
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// OVERRIDES AND METHODS FOR FATIGUE
+
+procedure WaitFatigue(t: Double; Exp: Double=0.2);
+begin
+  System.Wait(Trunc(2*t * (1-Power(System.Max(0.0001, Bot.EnergyLevel/100),Exp))));
+end;
+
+procedure Wait(min, max:Double; weight:EWaitDir=wdMean); override;
+var t:Double;
+begin
+  t := PerformanceTimer();
+  inherited(min, max, weight);
+  WaitFatigue(PerformanceTimer()-t,0.2);
+end;
+
+procedure WaitEx(mean, dev:Double); override;
+var t:Double;
+begin
+  t := PerformanceTimer();
+  inherited(mean, dev);
+  WaitFatigue(PerformanceTimer()-t, 0.2);
+end;
+
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// MINER
+
+function TSmelter.TimeSinceBreak(): UInt64;
+var i: UInt64;
+begin
+  Result := GetTimeRunning();
+  for i:=0 to High(Self.Breaks) do
+    if(GetTimeRunning()-Self.Breaks[i].Prev < Result) then
+      Result := GetTimeRunning()-Round(Self.Breaks[i].Prev);
+end;
+
+function TSmelter.BreakPower(): Double;
+var
+  i,last: Int32;
+  lastTime, perfect: Double;
+  lastBreak: TBreakTimer;
+begin
+  perfect := Self.Breaks[High(Self.Breaks)].Length;
+  for i:=1 to High(Self.Breaks) do
+    if Self.Breaks[i].Prev <= Self.Breaks[last].Prev then
+      last := i;
+
+  lastBreak := Self.Breaks[last];
+  Result := Power(lastBreak.Length / perfect, 1/2);
+end;
+
+procedure TSmelter.ReseedRandom(UpTo: Int32);
+var
+  TimeRunning: Int64;
+begin
+  TimeRunning := GetTimeRunning();
+  if UpTo >= 0 then Self.Breaks[0] := ['STUFF', ONE_HOUR*srl.GaussRand(1,0.1), ONE_MINUTE*srl.GaussRand(4,0.1),  TimeRunning, 10];
+  if UpTo >= 1 then Self.Breaks[1] := ['EAT',   ONE_HOUR*srl.GaussRand(3,0.3), ONE_MINUTE*srl.GaussRand(20,5.0), TimeRunning, 80];
+  if UpTo >= 2 then Self.Breaks[2] := ['SLEEP', ONE_HOUR*srl.GaussRand(9,1.0), ONE_HOUR*srl.GaussRand(14,1.0),   TimeRunning, 90];
+
+  Self.EnergyLevel := 100 * BreakPower();
+end;
+
+
+procedure TSmelter.DeclarePlayers();
+begin
+  with Players.New()^ do
+  begin
+    LoginName := LOGIN_NAME;
+    Password  := LOGIN_PASS;
+    IsActive  := True;
+    IsMember  := IS_MEMBER;
+    World     := RS_WORLD;
+  end;
+  Players.SetCurrent(0);
+end;
+
+function TSmelter.DoBreak(ForceNearest: Boolean): Boolean;
+var
+  i,j,PauseLen: Int32;
+begin
+  for i:=0 to High(Breaks) do
+    if GetTimeRunning() > Breaks[i].Prev + Breaks[i].Interval then
+    begin
+      PauseLen := Trunc(Max(ONE_MINUTE, srl.GaussRand(Breaks[i].Length, Breaks[i].Length*0.15)));
+      Antiban.DebugNote('[RND] Pausing for '+ ToStr(SRL.MsToTime(PauseLen, Time_Formal)) + ' ('+Breaks[i].Name+')');
+
+      if (Random(100) < Breaks[i].LogoutChance) then
+      begin
+        Logout.Open();            WaitEx(700,90);
+        Logout.ClickLogout();     WaitEx(700,90);
+        RSClient.LoseFocus();
+      end;
+
+      repeat
+        Wait(Min(PauseLen, ONE_MINUTE));
+        PauseLen -= ONE_MINUTE;
+        Antiban.DebugNote('[RND] '+ ToStr(SRL.MsToTime(PauseLen, Time_Formal)) + ' left of the break');
+      until PauseLen < 0;
+
+      Self.ReseedRandom(i);
+      Exit(True);
+    end;
+end;
+
+procedure TSmelter.DoAntiban();
+begin
+  srl.DismissRandom();
+  if Self.Antiban.DoAntiban() then
+  begin
+    Players.GetCurrent()^.Login(); // if we got logged out
+  end;
+
+  if Self.DoBreak(False) then
+  begin
+    if Random(3) = 0 then
+    begin
+      Stats.HoverSkill(Self.Antiban.ActiveSkill, srl.GaussRand(3000,400), Random(5) > 1);
+      WaitEx(2500,500);
+    end;
+    Players.GetCurrent()^.Login(); // if we got logged out
+  end;
+end;
+
+
+procedure TSmelter.PostAction(CheckAntiban: Boolean = True);
+begin
+  WaitEx(500,70);
+  if CheckAntiban then Self.DoAntiban;
+end;
+
+
+procedure TSmelter.ProcessWhileWaiting();
+var
+  n,atNextLvl,atCurrLvl:Int32;
+begin
+  BotStats.Gains := BotStats.Count * BotStats.XPPerBar;
+  BotStats.CurrXP  := BotStats.StartInfo.XP + BotStats.Gains;
+  BotStats.CurrLvl := srl.GetLevelAtXP(Ceil(BotStats.CurrXP));
+  atNextLvl := srl.GetXPAtLevel(Trunc(BotStats.CurrLvl)+1);
+  atCurrLvl := srl.GetXPAtLevel(Trunc(BotStats.CurrLvl));
+  BotStats.Rem := atNextLvl - BotStats.CurrXP;
+  BotStats.PrcToNextLvl := 100 - Round((BotStats.Rem / (atNextLvl - atCurrLvl)) * 100);
+
+  if GetTickCount() - StatsDebugTick > 6000 then
+  begin
+    ClearDebug();
+    BotStats.Gains := BotStats.XPPerBar * BotStats.Count;
+    WriteLn('+---| STATS |----------------------------------------');
+    WriteLn('|- Bars Made           : ', BotStats.Count);
+    WriteLn('|- Experience Gained   : ', Round(BotStats.Gains,2));
+    WriteLn('|- Experience Per Hour : ', Round(BotStats.Gains / (GetTimeRunning()/1000/60/60)) );
+    WriteLn('|- Current Level       : ', Round(BotStats.CurrLvl,2));
+    WriteLn('|- Dismissed Randoms   : ', BotStats.DismissedRandoms);
+    WriteLn('|- Time Since Break    : ', SRL.MsToTime(Self.TimeSinceBreak, Time_Short));
+    WriteLn('|- Script Runtime      : ', SRL.MsToTime(GetTimeRunning, Time_Short));
+    WriteLn('+----------------------------------------------------');
+
+    StatsDebugTick := GetTickCount();
+  end;
+  Self.DoAntiban;
+end;
+
+
+function TSmelter.Contains(R: TRectangle; Colors: array of TCTS2Color): Boolean;
+var
+  TPA: TPointArray;
+  i, count: Int32;
+begin
+  for i:=0 to High(Colors) do
+  begin
+    count += srl.FindColors(TPA, Colors[i], R.Bounds);
+    if count > 100 then  //XXXXXXXXXXXX
+      Exit(True);
+  end;
+end;
+
+
+function TSmelter.Find(Locations: TPointArray): TRectArray;
+var
+  i: Int32;
+  me: TPoint;
+  rect: TRectangle;
+begin
+  me := RSW.GetMyPos();
+  for i:=0 to High(Locations) do
+  begin
+    rect := WorldToMSTile(me, Locations[i], 0,0,0).Expand(-2);
+    if MainScreen.GetBounds.Contains(rect.Bounds) then
+      Result += rect;
+  end;
+
+  if Length(Result) = 0 then
+    TerminateScript('Not close enough to objects: ('+ ToStr(me.x) +','+ToStr(me.y)+') -> '+ ToStr(locations));
+end;
+
+{$RangeChecks OFF}
+function TSmelter.DoWork(): Boolean;
+var
+  i,next: Int32;
+  T: TCountDown;
+  Furnace: TRectangle;
+
+  function ClickFurnace(rect: TRectangle): Boolean;
+  begin
+    mouse.Move(rect, Random(10) = 0);
+    WaitEx(65,10);
+    if not Mainscreen.IsUpText(['Smelt', 'Furnace']) then
+      Exit();
+
+    if (not ((Random()*100 <= 5) and ChooseOption.Select('Smelt Furnace'))) and
+       (not Mouse.Click(ctRed)) then
+    begin
+      Wait(300,6000,wdLeft);
+      Self.DoAntiban;
+      WaitFatigue(Random(1000,4500), 0.6);
+      Exit();
+    end;
+
+    WaitFatigue(Random(700,1200), 0.1);
+    Minimap.WaitPlayerMoving(False,,200);
+
+    if Chatbox.ClickButtonId('What would you', MAKE_ID, BAR_NAME, 3000) then
+      Result := True;
+  end;
+
+begin
+  Furnace := Self.Find([self.FurnaceSpot])[0];
+  if not Contains(Furnace, Self.FurnaceColors) then
+    Exit(False);
+
+  WaitFatigue(Random(700,1200), 0.1);
+  if not ClickFurnace(Furnace) then
+    Exit;
+
+  T.Init(srl.NormalRange(ONE_MINUTE*4, ONE_MINUTE*4+ONE_MINUTE));
+  while (not T.IsFinished) do
+  begin
+    if (Inventory.Count(ORE_NAMES[0]) = 0) or (Inventory.Count(ORE_NAMES[High(ORE_NAMES)]) = 0)  then
+      Break;
+
+    if(Chatbox.GotLevelUp()) then
+    begin
+      if(Random(9) = 0) then
+        Chatbox.HandleLevelUp();
+      Break;
+    end
+
+    Self.ProcessWhileWaiting();
+    WaitEx(30,5);
+  end;
+  Result := True;
+end;
+{$RangeChecks ON}
+
+procedure TSmelter.DoBanking();
+  function OpenBank(): Boolean;
+  var
+    rect: TRectangle;
+    me: TPoint;
+  begin
+    for 0 to 4 do
+    begin
+      me := RSW.GetMyPos();
+      self.BankSpots.Sort(me);
+      for rect in Find(self.BankSpots) do
+        if Contains(Rect, Self.BankColors) and
+           BankScreen.OpenAt(srl.RandomPoint(rect.Expand(-6))) then
+          Exit(True);
+      Minimap.SetCompassAngle_Key([0,90,180,270][Random(4)]+Random(-15,15));
+      Wait(800,1300);
+    end;
+  end;
+
+begin
+  if(not RSW.WebWalk([4885, 3776])) then
+    TerminateScript('Failed to walk to bank');
+  Self.DoAntiban;
+
+  if(not OpenBank()) then
+    TerminateScript('Failed to open bank');
+  PostAction(False);
+
+  if(not BankScreen.DepositAll) then
+    TerminateScript('Failed to deposit items');
+  PostAction(False);
+
+  if(not BankScreen.Withdraw(ORE_NAMES[0], ORE_RATIO[0], [ORE_NAMES[0]])) then
+    TerminateScript('Failed to withdraw items');
+  PostAction(False);
+
+  if High(ORE_NAMES) <> 0 then
+    if(not BankScreen.Withdraw(ORE_NAMES[High(ORE_NAMES)], ORE_RATIO[High(ORE_RATIO)], [ORE_NAMES[High(ORE_NAMES)]])) then
+      TerminateScript('Failed to withdraw items');
+  PostAction;
+
+  if(not RSW.WebWalk([4913, 3709])) then
+    TerminateScript('Failed to walk to furnace');
+  Self.DoAntiban;
+end;
+
+procedure TSmelter.Run();
+var
+  tick: UInt64;
+begin
+  Self.StartTime := GetTickCount();
+  Self.BotStats.StartInfo := Stats.GetSkillInfo(SKILL_SMITHING);
+
+  repeat
+    if Inventory.Count(ORE_NAMES[0]) = 0 then
+    begin
+      Self.BotStats.Count += Length(Inventory.GetUsedSlots);
+      Self.DoBanking();
+    end;
+
+    if Self.DoWork() then
+      Self.DoAntiban;
+
+    if GetTimeRunning() > tick then
+    begin
+      Self.EnergyLevel -= 0.5;
+      Self.EnergyLevel := Max(1,Self.EnergyLevel);
+      tick := GetTimeRunning() + Random(ONE_MINUTE div 2, ONE_MINUTE + ONE_MINUTE div 2);
+    end;
+    Wait(1);
+  until False;
+end;
+
+
+procedure TSmelter.SetupAntiban();
+begin
+  Antiban.Init(SKILL_SMITHING);
+  Antiban.AddTask([ONE_MINUTE*6,  0, @Antiban.LoseFocus]);
+  Antiban.AddTask([ONE_MINUTE*8,  0, @Antiban.HoverPlayers]);
+  Antiban.AddTask([ONE_MINUTE*11, 0, @Antiban.CheckSkill]);
+  Antiban.AddTask([ONE_MINUTE*13, 0, @Antiban.CheckStats]);
+  Antiban.AddTask([ONE_MINUTE*16, 0, @Antiban.OpenRandomTab]);
+  Antiban.AddTask([ONE_MINUTE*35, 0, @Antiban.VeryShortBreak]);
+  Antiban.AddTask([ONE_MINUTE*35, 0, @Antiban.RandomCompass]);
+  Antiban.AddTask([ONE_MINUTE*45, 0, @Antiban.DoMiscStuff]);
+end;
+
+procedure TSmelter.Init();
+begin
+  self.PlayerBox := Minimap.VecToMsRect(Vec3(MM2MS.MMCX,MM2MS.MMCY,2)).Expand(7).Bounds;
+  self.DeclarePlayers();
+
+  Players.GetCurrent()^.Login();
+  Mainscreen.SetAngle(True);
+
+  SetLength(Self.Breaks, 3);
+  Self.ReseedRandom(99);
+
+  Self.EnergyLevel := Random(90,100);
+
+  Self.FurnaceSpot   := [4902,3703];
+  Self.FurnaceColors := [CTS2(2500136, 15),  CTS2(3026482, 15)];
+  Self.BankSpots  := [[4883,3776],[4883,3772],[4883,3780],[4883,3784]];
+  Self.BankColors := [CTS2(608352,15),CTS2(605521,15),CTS2(5462367,15),CTS2(3158069,15),CTS2(4870227,15)];
+
+  Self.SetupAntiban();
+
+  case Uppercase(BAR_NAME) of
+    'BRONZE BAR':     Self.BotStats.XPPerBar := 12.5;
+    'IRON BAR':       Self.BotStats.XPPerBar := 12.5;
+    'SILVER BAR':     Self.BotStats.XPPerBar := 13.7;
+    'STEEL BAR':      Self.BotStats.XPPerBar := 17.5;
+    'GOLD BAR':       Self.BotStats.XPPerBar := 22.5;
+    'MITHRIL BAR':    Self.BotStats.XPPerBar := 30.0;
+    'ADAMANTITE BAR': Self.BotStats.XPPerBar := 37.5;
+    'RUNITE BAR':     Self.BotStats.XPPerBar := 75.0;
+  else
+    TerminateScript('Invalid bar name');
+  end;
+end;
+
+
+begin
+  srl.SetupForClient('',[]);
+  RSClient.SetFocus();
+
+  Bot.Init();
+
+  RSW.Init('world.png');
+  RSW.skipClose := 30;
+  AddOnTerminate(@RSW.Free);
+
+  Bot.Run();
+end.

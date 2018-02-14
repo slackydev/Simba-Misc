@@ -1,0 +1,391 @@
+program BarbFlyFisher_V001;
+{$I SRL/OSR.simba}
+{$I SRL/utils/rsclient.simba}
+{$I SRL/utils/rsclient_overrides.simba}
+{$I RSWalker/Walker.simba}
+{$I WindowOverlay/WindowOverlay.simba}
+{$H-}
+{==============================================================================]
+| Barbarian Fisher ™
+|
+| Steps to use:
+|   1. For longer runs you need to declare login details bellow
+|   2. Start the script wherever, just have fishing rod and feathers in your inv
+|
+| Any issues starting it: Re-target RS, and try again.
+[==============================================================================}
+const
+  LOGIN_NAME   = '';
+  LOGIN_PASS   = '';
+  RS_WORLD     = -1;         // preferred world, -1 = random world
+  IS_MEMBER    = FALSE;      // TRUE or FALSE
+
+type
+  TFisher = record
+    BankPath: TPointArray;
+    EnergyLevel: Double;
+    Antiban: TAntiban;
+  end;
+
+var
+  Bot: TFisher;
+  RSW: TRSWalker;
+  Overlay: TWindowOverlay;
+  Debug: TMufasaBitmap;
+
+var
+  SalmonDTM := DTMFromString('mrAAAAHic42BgYJjKxMDQD8RdQLwQiBcA8Swg7gDi6UD8DKjmAxC/BOLbQPwIiF8A8XsgvgvEp10lgCQjTizHgB/g1gnBMAAAzZcNRg==');
+  TroutDTM  := DTMFromString('mrAAAAHic42BgYJjGxMDQAcQTmCDshUC8BIinA3E/EHMxMjAIAzEHEDMA8R8gxQykBYBYBIibstMgEjiwHAN+gFsnBMMAABHQB5c=');
+  BurntDTM  := DTMFromString('mlwAAAHicY2dgYJjKxMAwDYg7ofRcIF4CxAuBOICRgcEDiGOAOAqIA4HYG4hdgNjSxASomxEHxg1w6UDSBQBl4wcl');
+  RawTrout  := DTMFromString('mggAAAHicY2NgYJjKxMAwDYgXAvESKLsDiMsZGRhygDgDiPOBuA6I64F457q1QF2MWDB2gE0lQjUAQtcIfQ==');
+  RawSalmon := DTMFromString('mlwAAAHicY2dgYJjGBMELgXgJlN0BxL1ArMfIwKACxApArA7EZkBszggRX5efBNTNiAPjBrh0IOkCAEQMBvk=');
+  Feathers  := DTMFromString('mlwAAAHicY2dgYHBmYmBwAGJvIHYBYlsgtgNiKyB+ApS/B8QPgfgNEH8G4hdA/BGIt69ZAyQZsWI5BtwAuw4IhgIAZtgKcg==');
+  FishingRod:= DTMFromString('m1gAAAHic42JgYMhiYmCIB+JsIC4E4gogLgPiAiDOAeJ0IE4F4qdAtW+A+A4Q3wDiq0B8H4ifAfE7IP4MxE+AONqZE0gyEsRyDMQBwiZBMAIAAO7FDhY=');
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// UTILETIES
+
+function WorldToMSTile(Me, ObjLoc: TPoint; Height:Double=0; Offx,Offy:Double=0): TRectangle;
+var
+  angle: Double;
+begin
+  ObjLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (ObjLoc - Me);
+  angle  := Minimap.GetCompassAngle(False);
+  ObjLoc := ObjLoc.Rotate(angle, Point(MM2MS.MMCX, MM2MS.MMCY));
+  Result := Minimap.VecToMSRect(Vec3(ObjLoc.x - offx, ObjLoc.y - offy, Height), angle);
+end;
+
+function RotateMMToCompassMS(mm: TPoint; Height:Int32=0): TRectangle;
+var
+  angle: Double;
+begin
+  angle  := Minimap.GetCompassAngle(False);
+  mm     := mm.Rotate(angle, Point(MM2MS.MMCX, MM2MS.MMCY));
+  Result := Minimap.VecToMSRect(Vec3(mm.x, mm.y, Height), angle);
+end;
+
+procedure TMouse.Move(P: TPoint); override;
+var
+  dist: Double;
+  q: TPoint;
+  maxSpeed := Random(20,22);
+  minSpeed := Random(4,6);
+begin
+  q := Self.GetPosition;
+  dist := Hypot(q.x-p.x, q.y-p.y);
+  self.Speed := Trunc(minSpeed + (maxSpeed-minSpeed) * Power(dist / 1000, 1/2));
+  inherited;
+end;
+
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// OVERRIDES AND METHODS FOR FATIGUE
+
+procedure WaitFatigue(t: Double; Exp: Double=0.2);
+begin
+  System.Wait(Trunc(2*t * (1-Power(System.Max(0.0001, Bot.EnergyLevel/100),Exp))));
+end;
+
+procedure Wait(min, max:Double; weight:EWaitDir=wdMean); override;
+var t:Double;
+begin
+  t := PerformanceTimer();
+  inherited(min, max, weight);
+  WaitFatigue(PerformanceTimer()-t,0.2);
+end;
+
+procedure WaitEx(mean, dev:Double); override;
+var t:Double;
+begin
+  t := PerformanceTimer();
+  inherited(mean, dev);
+  WaitFatigue(PerformanceTimer()-t, 0.2);
+end;
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// FISHER
+
+procedure TFisher.DeclarePlayers();
+begin
+  with Players.New()^ do
+  begin
+    LoginName  := LOGIN_NAME;
+    Password   := LOGIN_PASS;
+    IsActive   := True;
+    IsMember   := IS_MEMBER;
+    World      := RS_WORLD;
+  end;
+  Players.SetCurrent(0);
+end;
+
+procedure TFisher.DoAntiban();
+begin
+  srl.DismissRandom();
+  if Self.Antiban.DoAntiban() then
+    Players.GetCurrent()^.Login(); // if we got logged out, and not logged back in
+end;
+
+procedure TFisher.PostAction(AntiBan:Boolean=True);
+begin
+  WaitEx(450,70);
+  if AntiBan then Self.DoAntiban;
+end;
+
+function TFisher.FindFishingSpot(scanTime: Int32=450): T2DPointArray;
+var
+  i: Int32;
+  SUM,TMP,TPA: TPointArray;
+  R: TRectangle;
+  t: TCountDown;
+begin
+  t.Init(scanTime);
+  while not t.IsFinished do
+  begin
+    SetLength(TMP, 0);
+    srl.FindColors(TPA, CTS2(8875103,16,0.2,0.7), Mainscreen.GetBounds);
+    SUM += TPA.Edges();
+  end;
+
+  SUM.ClearDuplicates();
+  SUM := ClearTPAFromTPA(Sum, Sum.Edges());
+  SUM += Sum.Edges();
+  Result := SUM.Cluster(5);
+  Result.FilterSize(12, __GT__);
+
+  Debug.Clear();
+  for i:=0 to High(Result) do
+    Debug.DrawTPA(Result[i], Random($FFFFFF));
+end;
+
+function TFisher.IsFishing(): Boolean;
+var
+  rect1,rect2: TRectangle;
+  TPA1,TPA2: TPointArray;
+begin
+  Rect1 := RotateMMToCompassMS([646,84],1);
+  Rect2 := RotateMMToCompassMS([649,84],1);
+  Debug.DrawRect(Rect1, $FFFFFF);
+  Debug.DrawRect(Rect2, $FFFFFF);
+  if srl.FindColors(TPA1, CTS2(6694,10), Rect1.Bounds) > 12 then
+    Result := srl.FindColors(TPA2, CTS2(6694,10), Rect2.Bounds) > 5;
+end;
+
+function TFisher.Fish(): Boolean;
+var
+  ATPA: T2DPointArray;
+  TPA: TPointArray;
+begin
+  if (not Inventory.Contains(FishingRod)) or
+     (not Inventory.Contains(Feathers)) then
+    TerminateScript('No feathers or fly fishing rod');
+
+  ATPA := Self.FindFishingSpot();
+  ATPA.SortByMiddle(mainscreen.GetMiddle);
+  for TPA in ATPA do
+  begin
+    mouse.Move(TPA.Bounds);
+    if not MainScreen.IsUpText(['Fishing spot']) then
+      Continue;
+
+    if mouse.Click(ctRed) then
+    begin
+      Wait(700,1000);
+      Minimap.WaitPlayerMoving();
+      Wait(1400,1700);
+
+      Self.FindFishingSpot(); //update drawing.
+      while Self.IsFishing() do
+      begin
+        Self.DoAntiban();
+        Chatbox.HandleLevelUp();
+        WaitEx(70,10);
+      end;
+      Exit(True);
+    end else
+    begin
+      Wait(700,1200);
+      Minimap.WaitPlayerMoving();
+      Wait(700,1200);
+      Exit(False);
+    end;
+  end;
+end;
+
+function TFisher.WaitCooking(): Boolean;
+var
+  c,currCount: Int32;
+  t: TCountDown;
+begin
+  c := Inventory.Count(RawTrout) + Inventory.Count(RawSalmon);
+
+  t.Init(5500);
+  repeat
+    if Chatbox.GotLevelUp then
+      Break;
+
+    currCount := Inventory.Count(RawTrout) + Inventory.Count(RawSalmon);
+    if currCount <> c then
+    begin
+      c := currCount;
+      t.Restart(50);
+    end;
+    Wait(Random(70,150));
+    Self.DoAntiban();
+  until t.IsFinished() or (c = 0);
+  Result := True;
+end;
+
+function TFisher.Cook(): Boolean;
+var
+  idx: Int32;
+  arr: TIntArray;
+  rect: TRectangle;
+  ATPA: T2DPointArray;
+  TPA: TPointArray;
+begin
+  Inventory.Open();
+  if (not Inventory.Contains(RawTrout)) and (not Inventory.Contains(RawSalmon)) then
+    Exit;
+
+  if Distance(Point(4230,2718), RSW.GetMyPos) > 8 then
+    RSW.WebWalk([4230,2718],2);
+
+  while ((arr := Inventory.FindItem(RawTrout) + Inventory.FindItem(RawSalmon)) <> []) do
+  begin
+    srl.FindColors(TPA, CTS2(12348,15), MainScreen.GetBounds);
+    ATPA := TPA.Cluster(5);
+    ATPA.SortByMiddle(Mainscreen.GetMiddle);
+    ATPA.FilterSize(16, __GT__);
+
+    Inventory.Use(arr[0]);
+    for TPA in ATPA do
+    begin
+      rect := TPA.MinAreaRect();
+      mouse.Move(rect);
+      if MainScreen.IsUpText(['Fire']) then
+        mouse.Click(mouse_Left)
+      else if MainScreen.IsUpText(['options']) then
+      begin
+        if not ChooseOption.Select('Fire') then
+        begin
+          Wait(300,600);
+          Minimap.SetCompassAngle_Key([0,90,180,270][Random(4)]+Random(-15,15));
+          Continue;
+        end
+      end else
+        continue;
+
+      Chatbox.ClickButtonId('How many', 1, 'Cook', 3000);
+      if Self.WaitCooking() then
+        Break;
+    end;
+  end;
+end;
+
+procedure TFisher.Deposit();
+var
+  dtms, slots: TIntArray;
+  dtm: Int32;
+  t: TCountDown;
+begin
+  RSW.WebWalk(P_EDGEVILLE, 3);
+  for 0 to 2 do
+    if BankScreen.Open(blEdgeville) then
+      Break
+    else
+      Wait(800,100);
+  if not BankScreen.IsOpen() then
+    TerminateScript('No bank');
+
+  dtms := [SalmonDTM, TroutDTM, BurntDTM, RawTrout, RawSalmon];
+  for dtm in dtms do
+  begin
+    slots := Inventory.FindItem(dtm);
+    if Length(slots) > 0 then
+    begin
+      BankScreen.DepositItem(slots[0], True);
+      t.Init(2000);
+      while (not t.IsFinished) and Inventory.IsSlotUsed(slots[0],False) do
+        Wait(70,160);
+    end;
+  end;
+end;
+
+procedure TFisher.SetupAntiban();
+begin
+  Antiban.Init(SKILL_FISHING);
+  Antiban.AddTask([ONE_MINUTE*6,  0, @Antiban.LoseFocus]);
+  Antiban.AddTask([ONE_MINUTE*8,  0, @Antiban.HoverPlayers]);
+  Antiban.AddTask([ONE_MINUTE*11, 0, @Antiban.CheckSkill]);
+  Antiban.AddTask([ONE_MINUTE*13, 0, @Antiban.CheckStats]);
+  Antiban.AddTask([ONE_MINUTE*16, 0, @Antiban.OpenRandomTab]);
+  Antiban.AddTask([ONE_MINUTE*35, 0, @Antiban.VeryShortBreak]);
+  Antiban.AddTask([ONE_MINUTE*35, 0, @Antiban.RandomCompass]);
+  Antiban.AddTask([ONE_MINUTE*45, 0, @Antiban.DoMiscStuff]);
+  Antiban.AddTask([ONE_HOUR*3,    0, @Antiban.TakeBreak]);
+end;
+
+procedure TFisher.Init();
+begin
+  RSW.Init('world.png');
+  Overlay := TWindowOverlay.Create();
+  Overlay.PaintInterval(100);
+  Debug := Overlay.ToMufasaBitmap();
+
+  self.EnergyLevel := 100;
+  self.DeclarePlayers();
+  self.SetupAntiban();
+
+  Players.GetCurrent()^.Login();
+  Wait(666);
+  mainscreen.SetAngle(True);
+end;
+
+procedure TFisher.Free();
+begin
+  RSW.Free();
+  Overlay.Free();
+  Debug.Free();
+  FreeDTMs([SalmonDTM, TroutDTM, BurntDTM, RawTrout, RawSalmon, Feathers, FishingRod]);
+end;
+
+var
+  idx: Int32;
+begin
+  srl.SetupForClient([]);
+  srl.Options := [];
+  RSClient.SetFocus();
+
+  bot.Init();
+  AddOnTerminate(@bot.Free);
+
+  Inventory.ShiftDrop := True;
+  while srl.isLoggedIn do
+  begin
+    if Inventory.IsFull() then
+    begin
+      bot.Cook();
+      bot.PostAction();
+      bot.Deposit();
+      bot.PostAction();
+    end;
+
+    if (not bot.Fish()) then
+    begin
+      if RSW.GetMyPos.DistanceTo([4245, 2716]) > 20 then
+        RSW.WebWalk([4245, 2716],3)
+      else
+        RSW.WebWalk([4223, 2748],3);
+      Wait(700,1200);
+    end;
+    Debug.Clear();
+    bot.DoAntiban();
+
+    ClearDebug();
+    WriteLn(bot.Antiban.TasksDone.Merge(#10#13));
+    WriteLn(srl.TimeRunning);
+  end;
+end.
