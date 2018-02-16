@@ -3,16 +3,19 @@ program BarbFlyFisher_V001;
 {$I SRL/utils/rsclient.simba}
 {$I SRL/utils/rsclient_overrides.simba}
 {$I RSWalker/Walker.simba}
-{$I WindowOverlay/WindowOverlay.simba}
+{.$I WindowOverlay/WindowOverlay.simba}
 {$H-}
 {==============================================================================]
-| Barbarian Fisher ™
+| Barbarian FlyFisher ™
 |
 | Steps to use:
 |   1. For longer runs you need to declare user details bellow
 |   2. Start the script wherever, just have fishing rod and feathers in your inv
 |
-| Any issues starting it: Re-target RS, and try again.
+| Any issues starting it: Re-target RS, and try again, may help if you log
+| in manually before starting it.
+|
+| Banking may not work very well, at times it will fail.
 [==============================================================================}
 type
   TFisherStyle = (FishCookBank, FishCookDrop, FishDrop);
@@ -34,8 +37,11 @@ type
 var
   Bot: TFisher;
   RSW: TRSWalker;
+
+  {$ifdecl TWindowOverlay}
   Overlay: TWindowOverlay;
   Debug: TMufasaBitmap;
+  {$endif}
 
 var
   SalmonDTM := DTMFromString('mrAAAAHic42BgYJjKxMDQD8RdQLwQiBcA8Swg7gDi6UD8DKjmAxC/BOLbQPwIiF8A8XsgvgvEp10lgCQjTizHgB/g1gnBMAAAzZcNRg==');
@@ -139,9 +145,11 @@ begin
   Result := SUM.Cluster(5);
   Result.FilterSize(12, __GT__);
 
+  {$ifdecl TWindowOverlay}
   Debug.Clear();
   for i:=0 to High(Result) do
     Debug.DrawTPA(Result[i], Random($FFFFFF));
+  {$endif}
 end;
 
 function TFisher.IsFishing(): Boolean;
@@ -151,8 +159,10 @@ var
 begin
   Rect1 := Minimap.StaticToMsRect([646,84],1);
   Rect2 := Minimap.StaticToMsRect([649,84],1);
+  {$ifdecl TWindowOverlay}
   Debug.DrawRect(Rect1, $FFFFFF);
   Debug.DrawRect(Rect2, $FFFFFF);
+  {$endif}
   if srl.FindColors(TPA1, CTS2(6694,10), Rect1.Bounds) > 12 then
     Result := srl.FindColors(TPA2, CTS2(6694,10), Rect2.Bounds) > 5;
 end;
@@ -346,7 +356,7 @@ begin
         RSW.WebWalk([4223, 2748],3);
       Wait(700,1200);
     end;
-    Debug.Clear();
+    {$ifdecl TWindowOverlay}Debug.Clear();{$endif}
     bot.DoAntiban();
 
     ClearDebug();
@@ -372,9 +382,11 @@ end;
 procedure TFisher.Init();
 begin
   RSW.Init('world.png');
+  {$ifdecl TWindowOverlay}
   Overlay := TWindowOverlay.Create();
   Overlay.PaintInterval(100);
   Debug := Overlay.ToMufasaBitmap();
+  {$endif}
 
   self.EnergyLevel := 100;
   self.DeclarePlayers();
@@ -389,8 +401,10 @@ end;
 procedure TFisher.Free();
 begin
   RSW.Free();
+  {$ifdecl TWindowOverlay}
   Overlay.Free();
   Debug.Free();
+  {$endif}
   FreeDTMs([SalmonDTM, TroutDTM, BurntDTM, RawTrout, RawSalmon, Feathers, FishingRod]);
 end;
 
