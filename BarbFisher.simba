@@ -9,16 +9,20 @@ program BarbFlyFisher_V001;
 | Barbarian Fisher ™
 |
 | Steps to use:
-|   1. For longer runs you need to declare login details bellow
+|   1. For longer runs you need to declare user details bellow
 |   2. Start the script wherever, just have fishing rod and feathers in your inv
 |
 | Any issues starting it: Re-target RS, and try again.
 [==============================================================================}
+type
+  TFisherStyle = (FishCookBank, FishCookDrop, FishDrop);
+
 const
-  LOGIN_NAME   = '';
-  LOGIN_PASS   = '';
-  RS_WORLD     = -1;         // preferred world, -1 = random world
-  IS_MEMBER    = FALSE;      // TRUE or FALSE
+  LOGIN_NAME = '';
+  LOGIN_PASS = '';
+  RS_WORLD   = -1;           // preferred world, -1 = random world
+  IS_MEMBER  = FALSE;        // TRUE or FALSE
+  STYLE      = FishCookDrop; // FishCookBank or FishCookDrop, FishDrop
 
 type
   TFisher = record
@@ -46,25 +50,6 @@ var
 // -----------------------------------------------------------------------------
 // UTILETIES
 
-function WorldToMSTile(Me, ObjLoc: TPoint; Height:Double=0; Offx,Offy:Double=0): TRectangle;
-var
-  angle: Double;
-begin
-  ObjLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (ObjLoc - Me);
-  angle  := Minimap.GetCompassAngle(False);
-  ObjLoc := ObjLoc.Rotate(angle, Point(MM2MS.MMCX, MM2MS.MMCY));
-  Result := Minimap.VecToMSRect(Vec3(ObjLoc.x - offx, ObjLoc.y - offy, Height), angle);
-end;
-
-function RotateMMToCompassMS(mm: TPoint; Height:Int32=0): TRectangle;
-var
-  angle: Double;
-begin
-  angle  := Minimap.GetCompassAngle(False);
-  mm     := mm.Rotate(angle, Point(MM2MS.MMCX, MM2MS.MMCY));
-  Result := Minimap.VecToMSRect(Vec3(mm.x, mm.y, Height), angle);
-end;
-
 procedure TMouse.Move(P: TPoint); override;
 var
   dist: Double;
@@ -72,7 +57,7 @@ var
   maxSpeed := Random(20,22);
   minSpeed := Random(4,6);
 begin
-  q := Self.GetPosition;
+  q := Self.GetPosition();
   dist := Hypot(q.x-p.x, q.y-p.y);
   self.Speed := Trunc(minSpeed + (maxSpeed-minSpeed) * Power(dist / 1000, 1/2));
   inherited;
@@ -137,7 +122,7 @@ end;
 function TFisher.FindFishingSpot(scanTime: Int32=450): T2DPointArray;
 var
   i: Int32;
-  SUM, TPA: TPointArray;
+  SUM,TPA: TPointArray;
   R: TRectangle;
   t: TCountDown;
 begin
@@ -164,8 +149,8 @@ var
   rect1,rect2: TRectangle;
   TPA1,TPA2: TPointArray;
 begin
-  Rect1 := RotateMMToCompassMS([646,84],1);
-  Rect2 := RotateMMToCompassMS([649,84],1);
+  Rect1 := Minimap.StaticToMsRect([646,84],1);
+  Rect2 := Minimap.StaticToMsRect([649,84],1);
   Debug.DrawRect(Rect1, $FFFFFF);
   Debug.DrawRect(Rect2, $FFFFFF);
   if srl.FindColors(TPA1, CTS2(6694,10), Rect1.Bounds) > 12 then
@@ -264,6 +249,7 @@ begin
     begin
       rect := TPA.MinAreaRect();
       mouse.Move(rect);
+      Wait(60,100);
       if MainScreen.IsUpText(['Fire']) then
         mouse.Click(mouse_Left)
       else if MainScreen.IsUpText(['options']) then
@@ -284,47 +270,103 @@ begin
   end;
 end;
 
-procedure TFisher.Deposit();
+procedure TFisher.DoInventory();
 var
   dtms, slots: TIntArray;
   dtm: Int32;
   t: TCountDown;
-begin
-  RSW.WebWalk(P_EDGEVILLE, 3);
-  for 0 to 2 do
-    if BankScreen.Open(blEdgeville) then
-      Break
-    else
-      Wait(800,100);
-  if not BankScreen.IsOpen() then
-    TerminateScript('No bank');
 
-  dtms := [SalmonDTM, TroutDTM, BurntDTM, RawTrout, RawSalmon];
-  for dtm in dtms do
+  procedure Deposit();
   begin
-    slots := Inventory.FindItem(dtm);
-    if Length(slots) > 0 then
+    RSW.WebWalk(P_EDGEVILLE, 3);
+    for 0 to 2 do
+      if BankScreen.Open(blEdgeville) then
+        Break
+      else
+        Wait(800,100);
+    if not BankScreen.IsOpen() then
+      TerminateScript('No bank');
+
+    dtms := [SalmonDTM, TroutDTM, BurntDTM, RawTrout, RawSalmon];
+    for dtm in dtms do
     begin
-      BankScreen.DepositItem(slots[0], True);
-      t.Init(2000);
-      while (not t.IsFinished) and Inventory.IsSlotUsed(slots[0],False) do
-        Wait(70,160);
+      slots := Inventory.FindItem(dtm);
+      if Length(slots) > 0 then
+      begin
+        BankScreen.DepositItem(slots[0], True);
+        t.Init(2000);
+        while (not t.IsFinished) and Inventory.IsSlotUsed(slots[0],False) do
+          Wait(70,160);
+      end;
     end;
+  end;
+
+  procedure Drop();
+  var
+    Ptrn: TIntArray;
+    i: Int32;
+  begin
+    dtms := [SalmonDTM, TroutDTM, BurntDTM, RawTrout, RawSalmon];
+    for dtm in dtms do
+      slots += Inventory.FindItem(dtm);
+
+    for i:=0 to 27 do
+      if slots.Find(i) <> -1 then
+        Ptrn += i;
+    Inventory.DropItems(Inventory.ErrorPattern(ptrn));
+  end;
+
+begin
+  if STYLE in [FishCookDrop, FishDrop] then
+    Drop()
+  else
+    Deposit();
+end;
+
+procedure TFisher.Run();
+begin
+  while srl.isLoggedIn() do
+  begin
+    if Inventory.IsFull() then
+    begin
+      if STYLE <> FishDrop then
+      begin
+        bot.Cook();
+        bot.PostAction();
+      end;
+      bot.DoInventory();
+      bot.PostAction();
+    end;
+
+    if (not bot.Fish()) then
+    begin
+      if RSW.GetMyPos.DistanceTo([4245, 2716]) > 20 then
+        RSW.WebWalk([4245, 2716],3)
+      else
+        RSW.WebWalk([4223, 2748],3);
+      Wait(700,1200);
+    end;
+    Debug.Clear();
+    bot.DoAntiban();
+
+    ClearDebug();
+    if Length(bot.Antiban.TasksDone) > 0 then WriteLn(bot.Antiban.TasksDone[High(bot.Antiban.TasksDone)]);
+    WriteLn('Runtime: ', srl.TimeRunning);
   end;
 end;
 
 procedure TFisher.SetupAntiban();
 begin
   Antiban.Init(SKILL_FISHING);
-  Antiban.AddTask([ONE_MINUTE*6,  0, @Antiban.LoseFocus]);
+  Antiban.AddTask([ONE_MINUTE*5,  0, @Antiban.LoseFocus]);
   Antiban.AddTask([ONE_MINUTE*8,  0, @Antiban.HoverPlayers]);
-  Antiban.AddTask([ONE_MINUTE*11, 0, @Antiban.CheckSkill]);
-  Antiban.AddTask([ONE_MINUTE*13, 0, @Antiban.CheckStats]);
-  Antiban.AddTask([ONE_MINUTE*16, 0, @Antiban.OpenRandomTab]);
-  Antiban.AddTask([ONE_MINUTE*35, 0, @Antiban.VeryShortBreak]);
-  Antiban.AddTask([ONE_MINUTE*35, 0, @Antiban.RandomCompass]);
-  Antiban.AddTask([ONE_MINUTE*45, 0, @Antiban.DoMiscStuff]);
-  Antiban.AddTask([ONE_HOUR*3,    0, @Antiban.TakeBreak]);
+  Antiban.AddTask([ONE_MINUTE*10, 0, @Antiban.CheckSkill]);
+  Antiban.AddTask([ONE_MINUTE*10, 0, @Antiban.CheckStats]);
+  Antiban.AddTask([ONE_MINUTE*12, 0, @Antiban.OpenRandomTab]);
+  Antiban.AddTask([ONE_MINUTE*25, 0, @Antiban.VeryShortBreak]);
+  Antiban.AddTask([ONE_MINUTE*25, 0, @Antiban.DoMiscStuff]);
+  Antiban.AddTask([ONE_MINUTE*45, 0, @Antiban.RandomCompass]);
+  Antiban.AddTask([ONE_HOUR*2,    0, @Antiban.TakeBreak]);
 end;
 
 procedure TFisher.Init();
@@ -341,6 +383,7 @@ begin
   Players.GetCurrent()^.Login();
   Wait(666);
   mainscreen.SetAngle(True);
+  Inventory.ShiftDrop := True;
 end;
 
 procedure TFisher.Free();
@@ -351,40 +394,14 @@ begin
   FreeDTMs([SalmonDTM, TroutDTM, BurntDTM, RawTrout, RawSalmon, Feathers, FishingRod]);
 end;
 
-var
-  idx: Int32;
+
+
 begin
   srl.SetupForClient([]);
-  srl.Options := [];
+  srl.Options := [soDebugAntiban];
   RSClient.SetFocus();
 
   bot.Init();
   AddOnTerminate(@bot.Free);
-
-  Inventory.ShiftDrop := True;
-  while srl.isLoggedIn do
-  begin
-    if Inventory.IsFull() then
-    begin
-      bot.Cook();
-      bot.PostAction();
-      bot.Deposit();
-      bot.PostAction();
-    end;
-
-    if (not bot.Fish()) then
-    begin
-      if RSW.GetMyPos.DistanceTo([4245, 2716]) > 20 then
-        RSW.WebWalk([4245, 2716],3)
-      else
-        RSW.WebWalk([4223, 2748],3);
-      Wait(700,1200);
-    end;
-    Debug.Clear();
-    bot.DoAntiban();
-
-    ClearDebug();
-    WriteLn(bot.Antiban.TasksDone.Merge(#10#13));
-    WriteLn(srl.TimeRunning);
-  end;
+  bot.Run();
 end.

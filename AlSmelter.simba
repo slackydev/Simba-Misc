@@ -90,20 +90,6 @@ begin
 end;
 
 
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-// MISC BOT FUNCTIONS
-
-function WorldToMSTile(Me, ObjLoc: TPoint; Height:Double=0; Offx,Offy:Double=0): TRectangle;
-var
-  Angle: Double;
-begin
-  ObjLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (ObjLoc - Me);
-  Angle  := Minimap.GetCompassAngle(False);
-  ObjLoc := ObjLoc.Rotate(Angle, Point(MM2MS.MMCX, MM2MS.MMCY));
-  Result := Minimap.VecToMSRect(Vec3(ObjLoc.x - offx, ObjLoc.y - offy, Height), Angle);
-end;
-
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -133,7 +119,7 @@ end;
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
-// MINER
+// SMITHER
 
 function TSmelter.TimeSinceBreak(): UInt64;
 var i: UInt64;
@@ -295,7 +281,7 @@ begin
   me := RSW.GetMyPos();
   for i:=0 to High(Locations) do
   begin
-    rect := WorldToMSTile(me, Locations[i], 0,0,0).Expand(-2);
+    rect := RSW.GetTileMSEx(me, Locations[i]).Expand(-2);
     if MainScreen.GetBounds.Contains(rect.Bounds) then
       Result += rect;
   end;
@@ -415,6 +401,7 @@ var
 begin
   Self.StartTime := GetTickCount();
   Self.BotStats.StartInfo := Stats.GetSkillInfo(SKILL_SMITHING);
+  Mainscreen.SetAngle(True);
 
   repeat
     if Inventory.Count(ORE_NAMES[0]) = 0 then
@@ -456,7 +443,6 @@ begin
   self.DeclarePlayers();
 
   Players.GetCurrent()^.Login();
-  Mainscreen.SetAngle(True);
 
   SetLength(Self.Breaks, 3);
   Self.ReseedRandom(99);
@@ -465,7 +451,7 @@ begin
 
   Self.FurnaceSpot   := [4902,3703];
   Self.FurnaceColors := [CTS2(2500136, 15),  CTS2(3026482, 15)];
-  Self.BankSpots  := [[4883,3776],[4883,3772],[4883,3780],[4883,3784]];
+  Self.BankSpots  := [[4882,3776],[4882,3772],[4882,3780],[4882,3784]];
   Self.BankColors := [CTS2(608352,15),CTS2(605521,15),CTS2(5462367,15),CTS2(3158069,15),CTS2(4870227,15)];
 
   Self.SetupAntiban();
