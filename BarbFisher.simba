@@ -29,8 +29,7 @@ const
 
 type
   TFisher = record
-    BankPath: TPointArray;
-    EnergyLevel: Double;
+    StatsDebugTick: Int64;
     Antiban: TAntiban;
   end;
 
@@ -52,23 +51,6 @@ var
   Feathers  := DTMFromString('mlwAAAHicY2dgYHBmYmBwAGJvIHYBYlsgtgNiKyB+ApS/B8QPgfgNEH8G4hdA/BGIt69ZAyQZsWI5BtwAuw4IhgIAZtgKcg==');
   FishingRod:= DTMFromString('m1gAAAHic42JgYMhiYmCIB+JsIC4E4gogLgPiAiDOAeJ0IE4F4qdAtW+A+A4Q3wDiq0B8H4ifAfE7IP4MxE+AONqZE0gyEsRyDMQBwiZBMAIAAO7FDhY=');
 
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-// UTILETIES
-
-procedure TMouse.Move(P: TPoint); override;
-var
-  dist: Double;
-  q: TPoint;
-  maxSpeed := Random(20,22);
-  minSpeed := Random(4,6);
-begin
-  q := Self.GetPosition();
-  dist := Hypot(q.x-p.x, q.y-p.y);
-  self.Speed := Trunc(minSpeed + (maxSpeed-minSpeed) * Power(dist / 1000, 1/2));
-  inherited;
-end;
-
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -76,24 +58,25 @@ end;
 
 procedure WaitFatigue(t: Double; Exp: Double=0.2);
 begin
-  System.Wait(Trunc(2*t * (1-Power(System.Max(0.0001, Bot.EnergyLevel/100),Exp))));
+  System.Wait(Trunc(2*t * (1-Power(System.Max(0.0001, Bot.Antiban.EnergyLevel()/100),Exp))));
 end;
 
 procedure Wait(min, max:Double; weight:EWaitDir=wdMean); override;
-var t:Double;
+var t: Double;
 begin
   t := PerformanceTimer();
   inherited(min, max, weight);
-  WaitFatigue(PerformanceTimer()-t,0.2);
+  WaitFatigue(PerformanceTimer()-t);
 end;
 
 procedure WaitEx(mean, dev:Double); override;
-var t:Double;
+var t: Double;
 begin
   t := PerformanceTimer();
   inherited(mean, dev);
-  WaitFatigue(PerformanceTimer()-t, 0.2);
+  WaitFatigue(PerformanceTimer()-t);
 end;
+
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -125,6 +108,28 @@ begin
   if AntiBan then Self.DoAntiban;
 end;
 
+
+procedure TFisher.ProcessWhileWaiting();
+begin
+  if GetTickCount() - StatsDebugTick > 2000 then
+  begin
+    ClearDebug();
+    ClearDebug();
+    WriteLn('+---| STATS |----------------------------------------');
+    WriteLn('|- Script Runtime    : ', SRL.MsToTime(GetTimeRunning, Time_Short));
+    WriteLn('|- Time Since Break  : ', SRL.MsToTime(Antiban.TimeSinceBreak(), Time_Short));
+    WriteLn('|- Past Breaks Sum   : ', SRL.MsToTime(Antiban.ResidualBreakValue(), Time_Short));
+    WriteLn('|- Energy Level      : ', Round(Antiban.EnergyLevel,2));
+    WriteLn('+----------------------------------------------------');
+    Self.StatsDebugTick := GetTickCount();
+  end;
+  Self.DoAntiban;
+end;
+
+
+// Find fishingspots by finding the edges of the water, over and over again
+// Then do some fancy stuff to remove land->water borders.
+// what's left is an accurate TPA of the fishingspot
 function TFisher.FindFishingSpot(scanTime: Int32=450): T2DPointArray;
 var
   i: Int32;
@@ -152,6 +157,8 @@ begin
   {$endif}
 end;
 
+// Basically we find the fishingrod by checking the two tiles infront of
+// our character. It can fail if your character covers most of the rod
 function TFisher.IsFishing(): Boolean;
 var
   rect1,rect2: TRectangle;
@@ -167,6 +174,8 @@ begin
     Result := srl.FindColors(TPA2, CTS2(6694,10), Rect2.Bounds) > 5;
 end;
 
+// Finds fishing spots, click one, and waits while we are fishing
+//
 function TFisher.Fish(): Boolean;
 var
   ATPA: T2DPointArray;
@@ -193,7 +202,7 @@ begin
       Self.FindFishingSpot(); //update drawing.
       while Self.IsFishing() do
       begin
-        Self.DoAntiban();
+        Self.ProcessWhileWaiting();
         Chatbox.HandleLevelUp();
         WaitEx(70,10);
       end;
@@ -208,9 +217,12 @@ begin
   end;
 end;
 
+// Waits while we are cooking.
+// Cooking is determined by checking if the number of raw fish in our inventory
+// is reducing. It must reduce by at least 1 within 5.5 seconds.
 function TFisher.WaitCooking(): Boolean;
 var
-  c,currCount: Int32;
+  c, currCount: Int32;
   t: TCountDown;
 begin
   c := Inventory.Count(RawTrout) + Inventory.Count(RawSalmon);
@@ -226,12 +238,18 @@ begin
       c := currCount;
       t.Restart(50);
     end;
-    Wait(Random(70,150));
-    Self.DoAntiban();
+    Self.ProcessWhileWaiting();
+    Wait(70);
   until t.IsFinished() or (c = 0);
   Result := True;
 end;
 
+// Do the cooking!
+// 1. Walks to a point near the eternal fire.
+// 2. Searches for the fire and uses a fish on the fire
+//    If it fails to find the fire it rotates the screen and tries again.
+// 3. Cooks it, and waits til we dont cook any more, or till we level up.
+// Repeats #2->#3 until there are no more fish in our inventory.
 function TFisher.Cook(): Boolean;
 var
   idx: Int32;
@@ -239,6 +257,7 @@ var
   rect: TRectangle;
   ATPA: T2DPointArray;
   TPA: TPointArray;
+  FoundFire: Boolean;
 begin
   Inventory.Open();
   if (not Inventory.Contains(RawTrout)) and (not Inventory.Contains(RawSalmon)) then
@@ -249,10 +268,11 @@ begin
 
   while ((arr := Inventory.FindItem(RawTrout) + Inventory.FindItem(RawSalmon)) <> []) do
   begin
+    FoundFire := False;
     srl.FindColors(TPA, CTS2(12348,15), MainScreen.GetBounds);
     ATPA := TPA.Cluster(5);
-    ATPA.SortByMiddle(Mainscreen.GetMiddle);
     ATPA.FilterSize(16, __GT__);
+    ATPA.SortByMiddle(Mainscreen.GetMiddle);
 
     Inventory.Use(arr[0]);
     for TPA in ATPA do
@@ -266,26 +286,33 @@ begin
       begin
         if not ChooseOption.Select('Fire') then
         begin
-          Wait(300,600);
-          Minimap.SetCompassAngle([0,90,180,270][Random(4)]+Random(-15,15));
+          Wait(60,200);
           Continue;
         end
       end else
         continue;
 
+      FoundFire := True;
       Chatbox.ClickButtonId('How many', 1, 'Cook', 3000);
       if Self.WaitCooking() then
         Break;
     end;
+
+    if(not FoundFire) then
+      Minimap.SetCompassAngle([0,90,180,270][Random(4)]+Random(-15,15));
   end;
 end;
 
+
+// Clear the inventory by dropping, or banking fish.
+//
 procedure TFisher.DoInventory();
 var
   dtms, slots: TIntArray;
   dtm: Int32;
   t: TCountDown;
 
+  // Deposits all the fish in our inventory, cooked, raw and burnt.
   procedure Deposit();
   begin
     RSW.WebWalk(P_EDGEVILLE, 3);
@@ -311,6 +338,7 @@ var
     end;
   end;
 
+  // drop all the fish in our inventory, cooked, raw and burnt.
   procedure Drop();
   var
     Ptrn: TIntArray;
@@ -325,7 +353,6 @@ var
         Ptrn += i;
     Inventory.DropItems(Inventory.ErrorPattern(ptrn));
   end;
-
 begin
   if STYLE in [FishCookDrop, FishDrop] then
     Drop()
@@ -333,22 +360,26 @@ begin
     Deposit();
 end;
 
+// Runs the bot
+//
 procedure TFisher.Run();
 begin
+  MainScreen.SetAngle(True);
+
   while srl.isLoggedIn() do
   begin
     if Inventory.IsFull() then
     begin
       if STYLE <> FishDrop then
       begin
-        bot.Cook();
-        bot.PostAction();
+        self.Cook();
+        self.PostAction();
       end;
-      bot.DoInventory();
-      bot.PostAction();
+      self.DoInventory();
+      self.PostAction();
     end;
 
-    if (not bot.Fish()) then
+    if not self.Fish() then
     begin
       if RSW.GetMyPos.DistanceTo([4245, 2716]) > 20 then
         RSW.WebWalk([4245, 2716],3)
@@ -356,27 +387,31 @@ begin
         RSW.WebWalk([4223, 2748],3);
       Wait(700,1200);
     end;
-    {$ifdecl TWindowOverlay}Debug.Clear();{$endif}
-    bot.DoAntiban();
 
-    ClearDebug();
-    if Length(bot.Antiban.TasksDone) > 0 then WriteLn(bot.Antiban.TasksDone[High(bot.Antiban.TasksDone)]);
-    WriteLn('Runtime: ', srl.TimeRunning);
+    {$ifdecl TWindowOverlay}
+    Debug.Clear();
+    {$endif}
+    Self.ProcessWhileWaiting();
   end;
 end;
 
 procedure TFisher.SetupAntiban();
 begin
-  Antiban.Init(SKILL_FISHING);
-  Antiban.AddTask([ONE_MINUTE*5,  0, @Antiban.LoseFocus]);
-  Antiban.AddTask([ONE_MINUTE*8,  0, @Antiban.HoverPlayers]);
-  Antiban.AddTask([ONE_MINUTE*10, 0, @Antiban.CheckSkill]);
-  Antiban.AddTask([ONE_MINUTE*10, 0, @Antiban.CheckStats]);
-  Antiban.AddTask([ONE_MINUTE*12, 0, @Antiban.OpenRandomTab]);
-  Antiban.AddTask([ONE_MINUTE*25, 0, @Antiban.VeryShortBreak]);
-  Antiban.AddTask([ONE_MINUTE*25, 0, @Antiban.DoMiscStuff]);
-  Antiban.AddTask([ONE_MINUTE*45, 0, @Antiban.RandomCompass]);
-  Antiban.AddTask([ONE_HOUR*2,    0, @Antiban.TakeBreak]);
+  Antiban.Init(SKILL_FISHING, 4);
+
+  Antiban.AddTask([@Antiban.LoseFocus,     ONE_MINUTE*5]);
+  Antiban.AddTask([@Antiban.HoverPlayers,  ONE_MINUTE*8]);
+  Antiban.AddTask([@Antiban.CheckSkill,    ONE_MINUTE*9]);
+  Antiban.AddTask([@Antiban.CheckStats,    ONE_MINUTE*10]);
+  Antiban.AddTask([@Antiban.OpenRandomTab, ONE_MINUTE*10]);
+  Antiban.AddTask([@Antiban.VeryShortBreak,ONE_MINUTE*25]);
+  Antiban.AddTask([@Antiban.DoMiscStuff,   ONE_MINUTE*25]);
+  Antiban.AddTask([@Antiban.RandomCompass, ONE_MINUTE*45]);
+
+  Antiban.AddBreak([45 * ONE_MINUTE, 05 * ONE_MINUTE, 0.05]);
+  Antiban.AddBreak([02 * ONE_HOUR,   10 * ONE_MINUTE, 0.15]);
+  Antiban.AddBreak([04 * ONE_HOUR,   45 * ONE_MINUTE, 0.85]);
+  Antiban.AddBreak([17 * ONE_HOUR,   07 * ONE_HOUR,   0.99]);
 end;
 
 procedure TFisher.Init();
@@ -388,14 +423,12 @@ begin
   Debug := Overlay.ToMufasaBitmap();
   {$endif}
 
-  self.EnergyLevel := 100;
   self.DeclarePlayers();
   self.SetupAntiban();
 
-  Players.GetCurrent()^.Login();
-  Wait(666);
-  mainscreen.SetAngle(True);
   Inventory.ShiftDrop := True;
+
+  Players.GetCurrent()^.Login();
 end;
 
 procedure TFisher.Free();
@@ -407,7 +440,6 @@ begin
   {$endif}
   FreeDTMs([SalmonDTM, TroutDTM, BurntDTM, RawTrout, RawSalmon, Feathers, FishingRod]);
 end;
-
 
 
 begin
