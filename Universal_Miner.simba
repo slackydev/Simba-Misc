@@ -56,7 +56,6 @@ type
 
     ClickOrder: TClickHistory;
     ProggyArea: TBox;
-    BufferImage: TMufasaBitmap;
 
     Antiban: TAntiban;
   end;
@@ -321,7 +320,7 @@ begin
     WriteLn('+----------------------------------------------------');
 
     {$IFDEF SMARTDEBUG}
-    Smart.Image.DrawProggyAt([280,2], PROGGY_BLUE, Trunc(BotStats.CurrXP), Trunc(BotStats.Gains), BotStats.Count, 'Mining');
+    ProggyArea := Smart.Image.DrawProggyAt([280,2], clProgBrown, Trunc(BotStats.CurrXP), Trunc(BotStats.Gains), BotStats.Count, 'Mining');
     {$ENDIF}
 
     StatsDebugTick := GetTickCount();
@@ -642,9 +641,6 @@ begin
   Mouse.Speed := 10;
   Players.GetCurrent()^.Login();
   mainscreen.SetAngle(True);
-
-  BufferImage.Init(client.GetMBitmaps);
-  BufferImage.SetSize(Smart.Image.GetWidth, Smart.Image.GetHeight);
 
   Inventory.ShiftDrop := SHIFT_DROP;
 end;
