@@ -320,7 +320,7 @@ begin
     WriteLn('+----------------------------------------------------');
 
     {$IFDEF SMARTDEBUG}
-    ProggyArea := Smart.Image.DrawProggyAt([280,2], clProgBrown, Trunc(BotStats.CurrXP), Trunc(BotStats.Gains), BotStats.Count, 'Mining');
+    ProggyArea := Smart.Image.DrawSkillReport([280,2], clProgBrown, Trunc(BotStats.CurrXP), Trunc(BotStats.Gains), BotStats.Count, 'Mining');
     {$ENDIF}
 
     StatsDebugTick := GetTickCount();
