@@ -1,6 +1,9 @@
-program Universal_Miner_V020;
-{$DEFINE RSCLIENT}
+program Universal_Miner_V027;
 {$I SRL/OSR.simba}
+{$I SRL/utils/rsclient.simba}
+{$I SRL/utils/rsclient_overrides.simba}
+{$I SRL/utils/slackdebug.simba}
+{$I WindowOverlay/WindowOverlay.simba}
 {$I RSWalker/Walker.simba}
 {$H-}{$R+}{$X+}
 {==============================================================================]
@@ -10,14 +13,16 @@ program Universal_Miner_V020;
 |   1. For longer runs you need to declare login details bellow
 |   2. Start the script at your min.ing site, and run setup.
 [==============================================================================}
-type EDropStyle = (dsRegular, dsIntense, dsAdaptive);
-{$DEFINE SMARTDEBUG}
+type
+  EDropStyle = (dsRegular, dsIntense, dsAdaptive);
+
 const
   LOGIN_NAME   = '';
   LOGIN_PASS   = '';
-  RS_WORLD     = 316;         // preferred world
+  RS_WORLD     = -1;          // preferred world
+  IS_MEMBER    = False;       //
   SHIFT_DROP   = True;        // use shift to drop
-  INTENSE_DROP = dsRegular;   // dsIntense, and dsAdaptive = mine some drop some (Often higher XP)
+  INTENSE_DROP = dsRegular;   // dsIntense, and dsAdaptive = mine some drop some (can be higher XP)
 
   CONFIG_PATH = IncludePath+'Universal_Miner/';
   CONFIG_FILE = 'config.cfg';
@@ -40,31 +45,10 @@ type
     Isset_XPPerOre: Boolean;
   end;
 
-  TBreakTimer = record
-    Name: String;
-    Interval: Double;
-    Length: Double;
-    Prev: Double;
-    LogoutChance: Int32;
-  end;
-
-  TAntibanTask = record
-    BaseInterval: Double;
-    NextAtTime: Double;
-    Method: procedure of object;
-  end;
-
-  TAntiban = record
-    ActiveSkill: Int32;
-    Tasks: array of TAntibanTask;
-  end;
-
   TMiner = record
-    PlayerBox: TBox;
     ConfigPath: String;
 
     StartTime: Int64;
-    EnergyLevel: Double;
     QuickDeposit: Boolean;
     BotStats: TStatistics;
     StatsDebugTick: Int64;
@@ -74,22 +58,9 @@ type
     BankPath: TPointArray;
 
     ClickOrder: TClickHistory;
-    ProggyArea: TBox;
-    BufferImage: TMufasaBitmap;
 
-    Breaks: array of TBreakTimer;
     Antiban: TAntiban;
-
-    Notes: TStringArray;
-
-    __RndCalls: Int32;
   end;
-
-const
-  ONE_SECOND = 1000;
-  ONE_MINUTE = ONE_SECOND * 60;
-  ONE_HOUR   = ONE_MINUTE * 60;
-  ONE_DAY    = ONE_HOUR   * 24;
 
 var
   INTENSITY_LEVEL: Double;
@@ -98,6 +69,11 @@ var
 var
   Bot: TMiner;
   RSW: TRSWalker;
+
+  {$ifdecl TWindowOverlay}
+  Overlay: TWindowOverlay;
+  Debug: TMufasaBitmap;
+  {$endif}
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -152,26 +128,10 @@ begin
   inherited;
 end;
 
-procedure DebugNote(s: String);
-begin
-  Bot.Notes += '['+FormatDateTime('hh:mm:ss', Now())+']' + s;
-  WriteLn(Bot.Notes[High(Bot.Notes)]);
-end;
-
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 // MISC BOT FUNCTIONS
-
-function WorldToMSTile(Me, ObjLoc: TPoint; Height:Double=0; Offx,Offy:Double=0): TRectangle;
-var
-  Angle: Double;
-begin
-  ObjLoc := Point(MM2MS.MMCX, MM2MS.MMCY) + (ObjLoc - Me);
-  Angle  := Minimap.GetCompassAngle(False);
-  ObjLoc := ObjLoc.Rotate(Angle, Point(MM2MS.MMCX, MM2MS.MMCY));
-  Result := Minimap.VecToMSRect(Vec3(ObjLoc.x - offx, ObjLoc.y - offy, Height), Angle);
-end;
 
 procedure TClickHistory.Push(x: TRectangle);
 begin
@@ -193,7 +153,7 @@ end;
 
 procedure WaitFatigue(t: Double; Exp: Double=0.2);
 begin
-  System.Wait(Trunc(2*t * (1-Power(System.Max(0.0001, Bot.EnergyLevel/100),Exp))));
+  System.Wait(Trunc(2*t * (1-Power(System.Max(0.0001, Bot.Antiban.EnergyLevel/100),Exp))));
 end;
 
 procedure Wait(min, max:Double; weight:EWaitDir=wdMean); override;
@@ -215,169 +175,7 @@ end;
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
-// ANTIBAN
-
-procedure TAntiban.LoseFocus();
-begin
-  DebugNote('[RND] Losing focus');
-  RSClient.LoseFocus();
-  WaitEx(25000,2000);
-  RSClient.SetFocus();
-  Players.GetCurrent()^.Login();
-  if Random(4)=0 then Stats.HoverSkill(Self.ActiveSkill, srl.GaussRand(3000,400));
-end;
-
-procedure TAntiban.HoverPlayers();
-begin
-  DebugNote('[RND] Hovering players');
-  srl.HoverRandomPlayer(20);
-end;
-
-procedure TAntiban.CheckSkill();
-begin
-  DebugNote('[RND] Check Skill Stats');
-  Stats.HoverSkill(Self.ActiveSkill, srl.GaussRand(3000,400), Random(5) > 1);
-end;
-
-procedure TAntiban.RandomCompass();
-begin
-  DebugNote('[RND] Rotate Compass');
-  Minimap.RandomCompass(-180,180, Random(5)=0);
-end;
-
-procedure TAntiban.CheckStats();
-begin
-  DebugNote('[RND] Look at Stats');
-  Stats.Open();
-  WaitEx(5000,400);
-  if Random(2) = 0 then Inventory.Open();
-end;
-
-procedure TAntiban.OpenRandomTab();
-begin
-  DebugNote('[RND] Open Random Tab');
-  Gametabs.Open(EGametab(Random(High(Gametabs.Tabs))));
-  WaitEx(1600,100);
-  if Random(4) = 0 then Inventory.Open()
-  else if Random(4) = 0 then Stats.Open();
-end;
-
-procedure TAntiban.VeryShortBreak();
-begin
-  DebugNote('[RND] Taking a breather');
-  if(Random(2)=0) then RSClient.LoseFocus();
-  WaitEx(50000,5000);
-  RSClient.SetFocus();
-  Players.GetCurrent()^.Login();
-  Wait(60,600, wdLeft);
-  Stats.HoverSkill(Self.ActiveSkill, srl.GaussRand(3000,400));
-end;
-
-procedure TAntiban.DoMiscStuff();
-begin
-  DebugNote('[RND] Doing misc stuff');
-  for 0 to Random(2) do
-  begin
-    if Random(3) = 0 then
-      Gametabs.Open(EGametab(Random(High(Gametabs.Tabs))));
-
-    WaitEx(1500,200);
-    if(Random(8) = 0) then
-    begin
-      if(Random(2) = 0) then RSClient.LoseFocus();
-      WaitEx(40000,4500);
-      RSClient.SetFocus();
-    end;
-
-    if(Random(4) > 1) then
-    begin
-      Stats.HoverSkill(Self.ActiveSkill, srl.GaussRand(3000,400), Random(5) > 1);
-      WaitEx(2500,300);
-    end;
-  end;
-end;
-
-
-//
-
-function TAntiban.Init(): Boolean;
-var
-  i: Int32;
-begin
-  Self.ActiveSkill := SKILL_MINING;
-  Self.Tasks := [
-    TAntibanTask([ONE_MINUTE*7,  0, @Self.LoseFocus]),
-    TAntibanTask([ONE_MINUTE*10, 0, @Self.HoverPlayers]),
-    TAntibanTask([ONE_MINUTE*11, 0, @Self.CheckSkill]),
-    TAntibanTask([ONE_MINUTE*13, 0, @Self.CheckStats]),
-    TAntibanTask([ONE_MINUTE*16, 0, @Self.OpenRandomTab]),
-    TAntibanTask([ONE_MINUTE*35, 0, @Self.VeryShortBreak]),
-    TAntibanTask([ONE_MINUTE*35, 0, @Self.RandomCompass]),
-    TAntibanTask([ONE_MINUTE*45, 0, @Self.DoMiscStuff])
-  ];
-
-  for i:=0 to High(Self.Tasks) do
-  begin
-    Self.Tasks[i].BaseInterval := srl.GaussRand(Self.Tasks[i].BaseInterval, Self.Tasks[i].BaseInterval*0.1);
-    Self.Tasks[i].NextAtTime   := GetTimeRunning() + Random() * Self.Tasks[i].BaseInterval;
-  end;
-end;
-
-function TAntiban.DoAntiban(): Boolean;
-var
-  i,j,PauseLen: Int32;
-begin
-  for i:=0 to High(Self.Tasks) do
-    if GetTimeRunning() > Self.Tasks[i].NextAtTime then
-    begin
-      Self.Tasks[i].Method();
-      Self.Tasks[i].NextAtTime := GetTimeRunning() + srl.GaussRand(Self.Tasks[i].BaseInterval, Self.Tasks[i].BaseInterval*0.125);
-      Result := True;
-    end;
-end;
-
-
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
 // MINER
-
-function TMiner.TimeSinceBreak(): UInt64;
-var i: UInt64;
-begin
-  Result := GetTimeRunning();
-  for i:=0 to High(Self.Breaks) do
-    if(GetTimeRunning()-Self.Breaks[i].Prev < Result) then
-      Result := GetTimeRunning()-Round(Self.Breaks[i].Prev);
-end;
-
-function TMiner.BreakPower(): Double;
-var
-  i,last: Int32;
-  lastTime, perfect: Double;
-  lastBreak: TBreakTimer;
-begin
-  perfect := Self.Breaks[High(Self.Breaks)].Length;
-  for i:=1 to High(Self.Breaks) do
-    if Self.Breaks[i].Prev <= Self.Breaks[last].Prev then
-      last := i;
-
-  lastBreak := Self.Breaks[last];
-  Result := Power(lastBreak.Length / perfect, 1/2);
-end;
-
-procedure TMiner.ReseedRandom(UpTo: Int32);
-var
-  TimeRunning: Int64;
-begin
-  TimeRunning := GetTimeRunning();
-  if UpTo >= 0 then Self.Breaks[0] := ['STUFF', ONE_HOUR*srl.GaussRand(1,0.1), ONE_MINUTE*srl.GaussRand(4,0.1),  TimeRunning, 10];
-  if UpTo >= 1 then Self.Breaks[1] := ['EAT',   ONE_HOUR*srl.GaussRand(3,0.3), ONE_MINUTE*srl.GaussRand(20,5.0), TimeRunning, 80];
-  if UpTo >= 2 then Self.Breaks[2] := ['SLEEP', ONE_HOUR*srl.GaussRand(9,1.0), ONE_HOUR*srl.GaussRand(14,1.0),   TimeRunning, 90];
-
-  INTENSITY_LEVEL := Random(50,80);
-  Self.EnergyLevel := 100 * BreakPower();
-end;
-
 
 procedure TMiner.DeclarePlayers();
 begin
@@ -386,62 +184,38 @@ begin
     LoginName := LOGIN_NAME;
     Password  := LOGIN_PASS;
     IsActive  := True;
-    IsMember  := False;
+    IsMember  := IS_MEMBER;
     World     := RS_WORLD;
   end;
   Players.SetCurrent(0);
 end;
 
+procedure TMiner.SetupAntiban();
+begin
+  Antiban.Init(SKILL_MINING);
+  Antiban.AddTask([@Antiban.LoseFocus,     ONE_MINUTE*7]);
+  Antiban.AddTask([@Antiban.HoverPlayers,  ONE_MINUTE*10]);
+  Antiban.AddTask([@Antiban.CheckSkill,    ONE_MINUTE*11]);
+  Antiban.AddTask([@Antiban.CheckStats,    ONE_MINUTE*13]);
+  Antiban.AddTask([@Antiban.OpenRandomTab, ONE_MINUTE*16]);
+  Antiban.AddTask([@Antiban.VeryShortBreak,ONE_MINUTE*35]);
+  Antiban.AddTask([@Antiban.RandomCompass, ONE_MINUTE*37]);
+  Antiban.AddTask([@Antiban.DoMiscStuff,   ONE_MINUTE*45]);
+
+  Antiban.AddBreak([1.0 * ONE_HOUR, 07 * ONE_MINUTE, 0.09]);
+  Antiban.AddBreak([3.5 * ONE_HOUR, 45 * ONE_MINUTE, 0.85]);
+  Antiban.AddBreak([17  * ONE_HOUR, 07 * ONE_HOUR,   0.99]);
+end;
 
 function TMiner.HasBanking(): Boolean;
 begin
   Result := (Self.BankColors <> []) and (Self.BankPath <> []) and (Self.BankSpots <> []);
 end;
 
-function TMiner.DoBreak(ForceNearest: Boolean): Boolean;
-var
-  i,j,PauseLen: Int32;
-begin
-  for i:=0 to High(Breaks) do
-    if GetTimeRunning() > Breaks[i].Prev + Breaks[i].Interval then
-    begin
-      PauseLen := Trunc(Max(ONE_MINUTE, srl.GaussRand(Breaks[i].Length, Breaks[i].Length*0.15)));
-      DebugNote('[RND] Pausing for '+ ToStr(SRL.MsToTime(PauseLen, Time_Formal)) + ' ('+Breaks[i].Name+')');
-
-      if (Random(100) < Breaks[i].LogoutChance) then
-      begin
-        Logout.Open();            WaitEx(700,90);
-        Logout.ClickLogout();     WaitEx(700,90);
-        RSClient.LoseFocus();
-      end;
-
-      repeat
-        Wait(Min(PauseLen, ONE_MINUTE));
-        PauseLen -= ONE_MINUTE;
-        DebugNote('[RND] '+ ToStr(SRL.MsToTime(PauseLen, Time_Formal)) + ' left of the break');
-      until PauseLen < 0;
-
-      Self.ReseedRandom(i);
-      Exit(True);
-    end;
-end;
-
 procedure TMiner.DoAntiban();
 begin
   if Self.Antiban.DoAntiban() then
-  begin
-    Players.GetCurrent()^.Login(); // if we got logged out
-  end;
-
-  if Self.DoBreak(False) then
-  begin
-    if Random(3) = 0 then
-    begin
-      Stats.HoverSkill(SKILL_MINING, srl.GaussRand(3000,400), Random(5) > 1);
-      WaitEx(2500,500);
-    end;
-    Players.GetCurrent()^.Login(); // if we got logged out
-  end;
+    Players.GetCurrent()^.Login();
 end;
 
 
@@ -467,18 +241,20 @@ begin
   if GetTickCount() - StatsDebugTick > 2000 then
   begin
     ClearDebug();
-    WriteLn('+---| NOTES |----------------------------------------');
-    WriteLn(Implode(#13#10, Notes));
     WriteLn('+---| STATS |----------------------------------------');
     WriteLn('|- Trips / Drops       : ', BotStats.Trips);
     WriteLn('|- Ores Mined          : ', BotStats.Count);
     WriteLn('|- Experience Gained   : ', BotStats.Gains);
     WriteLn('|- Experience Per Hour : ', Round(BotStats.Gains / (GetTimeRunning()/1000/60/60)) );
     WriteLn('|- Dismissed Randoms   : ', BotStats.DismissedRandoms);
-    WriteLn('|- Time Since Break    : ', SRL.MsToTime(Self.TimeSinceBreak, Time_Short));
-    WriteLn('|- Energy Level        : ', Self.EnergyLevel);
+    WriteLn('|- Time Since Break    : ', SRL.MsToTime(Self.Antiban.TimeSinceBreak, Time_Short));
+    WriteLn('|- Energy Level        : ', Self.Antiban.EnergyLevel);
     WriteLn('|- Script Runtime      : ', SRL.MsToTime(GetTimeRunning, Time_Short));
     WriteLn('+----------------------------------------------------');
+
+    {$ifdecl TWindowOverlay}
+    Debug.DrawSkillReport([282,3], clProgBrown, Trunc(BotStats.CurrXP), Trunc(BotStats.Gains), BotStats.Count, 'Mining');
+    {$ENDIF}
 
     StatsDebugTick := GetTickCount();
   end;
@@ -509,13 +285,18 @@ begin
   me := RSW.GetMyPos();
   for i:=0 to High(Locations) do
   begin
-    rect := WorldToMSTile(me, Locations[i], 0,0,0).Expand(-2);
+    rect := RSW.GetTileMSEx(me, Locations[i], 0,0,0).Expand(-2);
     if MainScreen.GetBounds.Contains(rect.Bounds) then
       Result += rect;
   end;
 
-  if Length(Result) = 0 then
-    TerminateScript('Not close enough to objects: ('+ ToStr(me.x) +','+ToStr(me.y)+') -> '+ ToStr(locations));
+  if (Length(Result) = 0) and srl.isLoggedIn() then
+    TerminateScript('Not close enough to objects: ('+ ToStr(me.x) +','+ToStr(me.y)+') -> '+ ToStr(locations))
+  else if not srl.isLoggedIn() then
+  begin
+    Players.GetCurrent()^.Login();
+    Result := Self.Find(Locations);
+  end;
 end;
 
 
@@ -534,7 +315,7 @@ var
     if Random()*100 <= CHANCE_OF_MISS then
     begin
       R := Minimap.PointToMsRect(Point(MM2MS.MMCX+Random(-6,6), MM2MS.MMCY+Random(-6,6)));
-      Mouse.Move(R.Mean, Trunc(R.Radius), True);
+      Mouse.Move(R, True);
       WaitEx(65,10);
       if MainScreen.IsUpText(['Walk here', 'Mine', 'Rocks']) then
         Exit();
@@ -544,7 +325,7 @@ var
 
   function ClickRock(rect: TRectangle): Int8;
   begin
-    mouse.Move(TRA[i].Mean, Trunc(TRA[i].Radius), Random(10) = 0);
+    mouse.Move(rect, Random(10) = 0);
     WaitEx(65,10);
     if not Mainscreen.IsUpText(['Mine', 'Rocks']) then
       Exit(1);
@@ -552,19 +333,19 @@ var
     if (not MaybeMiss()) then
       Exit(0);
 
-    if (not ((Random()*100 <= 5) and ChooseOption.Select('Mine Rocks'))) and
+    if (not ((Random() <= 0.05) and ChooseOption.Select('Mine Rocks'))) and
        (not Mouse.Click(ctRed)) then
     begin
       Wait(500,6000,wdLeft);
       Self.DoAntiban;
-      WaitFatigue(Random(1000,4500), 0.6);
+      WaitFatigue(Random(1500,3000), 0.6);
       Exit(0);
     end;
 
     for 6 to Round(srl.TruncatedGauss(0,12)) do
     begin
       Mouse.Click(mouse_Left);
-      WaitEx(70,10);
+      WaitEx(65,10);
     end;
 
     WaitEx(500,70);
@@ -596,9 +377,9 @@ begin
 
     TRA := Find(self.RockSpots); // update the TRA in case we moved
 
-    if (Self.EnergyLevel > INTENSITY_LEVEL) or (Random() < 0.05) then
+    if (Self.Antiban.EnergyLevel > INTENSITY_LEVEL) or (Random() < 0.05) then
     begin
-      if(Random() < Self.BreakPower) then
+      if(Random() < 0.1) then
       begin
         with ClickOrder.Pop() do
           Mouse.Move(Mean, Trunc(Radius))
@@ -744,7 +525,6 @@ end;
 procedure TMiner.Run();
 var
   loc: TPoint;
-  tick: UInt64;
 
   procedure TryDropWhileMining();
   begin
@@ -752,21 +532,18 @@ var
     begin
       if (INTENSE_DROP = dsIntense) then
         Self.IntenseDrop(@Self.DoWork)
-      else if (INTENSE_DROP = dsAdaptive) and (Self.EnergyLevel > INTENSITY_LEVEL) then
-      begin
+      else if (INTENSE_DROP = dsAdaptive) and (Self.Antiban.EnergyLevel > INTENSITY_LEVEL) then
         Self.IntenseDrop(@Self.DoWork);
-        Self.EnergyLevel -= 0.05;
-        Self.EnergyLevel := Max(1,Self.EnergyLevel);
-      end;
     end;
   end;
 
 begin
   Self.StartTime := GetTickCount();
-  Self.Antiban.Init();
+  Self.SetupAntiban();
+  MainScreen.SetAngle(True);
+
   if Inventory.Count = 0 then
     Self.QuickDeposit := True;
-
 
   if Self.HasBanking() then
   begin
@@ -791,30 +568,24 @@ begin
     end else
       Players.GetCurrent()^.Login();
 
-    if GetTimeRunning() > tick then
-    begin
-      Self.EnergyLevel -= 0.5;
-      Self.EnergyLevel := Max(1,Self.EnergyLevel);
-      tick := GetTimeRunning() + Random(ONE_MINUTE div 2, ONE_MINUTE + ONE_MINUTE div 2);
-    end;
     Wait(1);
   until False;
 end;
 
-
 procedure TMiner.Init();
 begin
-  self.PlayerBox := Minimap.VecToMsRect(Vec3(MM2MS.MMCX,MM2MS.MMCY,2)).Expand(7).Bounds;
+  {$ifdecl TWindowOverlay}
+  Overlay := TWindowOverlay.Create();
+  Overlay.PaintInterval(100);
+  Debug := Overlay.ToMufasaBitmap();
+  {$endif}
+
   self.DeclarePlayers();
 
   Mouse.Speed := 10;
   Players.GetCurrent()^.Login();
-  Mainscreen.SetAngle(True);
+  Self.SetupAntiban();
 
-  SetLength(Self.Breaks, 3);
-  Self.ReseedRandom(99);
-
-  Self.EnergyLevel := Random(90,100);
   Inventory.ShiftDrop := SHIFT_DROP;
 end;
 
@@ -841,18 +612,23 @@ begin
   RSClient.SetFocus();
 end;
 
+procedure TMiner.Free();
+begin
+  RSW.Free();
+  {$ifdecl TWindowOverlay}
+  Overlay.Free();
+  Debug.Free();
+  {$endif}
+end;
+
 
 begin
-  srl.SetupForClient('',[]);
-  RSClient.SetFocus();
-
+  srl.SetupForClient('',[soDebugAntiban]);
   Bot.Setup();
   Bot.Init();
+  AddOnTerminate(@Bot.Free);
 
   RSW.Init(Bot.ConfigPath+CONFIG_MAP);
-  RSW.skipClose := 25;
-  RSW.walkStyle := wsSPS;
-  RSW.minRunEnergy := 35;
   AddOnTerminate(@RSW.Free);
 
   Bot.Run();

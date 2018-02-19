@@ -1,9 +1,10 @@
-program Universal_Miner_V026;
+program Universal_Miner_V027;
 {$DEFINE SMART}
 {$I SRL/OSR.simba}
 {$I SRL/utils/slackdebug.simba}
 {$I RSWalker/Walker.simba}
 {$H-}{$R+}{$X+}
+{$DEFINE SMARTDEBUG}
 {==============================================================================]
 | Universal Miner ™
 |
@@ -11,14 +12,16 @@ program Universal_Miner_V026;
 |   1. For longer runs you need to declare login details bellow
 |   2. Start the script at your mining site, and run setup.
 [==============================================================================}
-type EDropStyle = (dsRegular, dsIntense, dsAdaptive);
-{$DEFINE SMARTDEBUG}
+type
+  EDropStyle = (dsRegular, dsIntense, dsAdaptive);
+
 const
   LOGIN_NAME   = '';
   LOGIN_PASS   = '';
-  RS_WORLD     = 335;         // preferred world
+  RS_WORLD     = -1;          // preferred world
+  IS_MEMBER    = False;       //
   SHIFT_DROP   = True;        // use shift to drop
-  INTENSE_DROP = dsRegular;  // dsIntense, and dsAdaptive = mine some drop some (Often higher XP)
+  INTENSE_DROP = dsRegular;   // dsIntense, and dsAdaptive = mine some drop some (Often higher XP)
 
   CONFIG_PATH = IncludePath+'Universal_Miner/';
   CONFIG_FILE = 'config.cfg';
@@ -253,7 +256,7 @@ begin
     LoginName := LOGIN_NAME;
     Password  := LOGIN_PASS;
     IsActive  := True;
-    IsMember  := False;
+    IsMember  := IS_MEMBER;
     World     := RS_WORLD;
   end;
   Players.SetCurrent(0);
@@ -271,9 +274,9 @@ begin
   Antiban.AddTask([@Antiban.RandomCompass, ONE_MINUTE*35]);
   Antiban.AddTask([@Antiban.DoMiscStuff,   ONE_MINUTE*45]);
 
-  Antiban.AddBreak([1.0 * ONE_MINUTE, 07 * ONE_MINUTE, 0.09]);
-  Antiban.AddBreak([3.5 * ONE_HOUR,   45 * ONE_MINUTE, 0.85]);
-  Antiban.AddBreak([17  * ONE_HOUR,   07 * ONE_HOUR,   0.99]);
+  Antiban.AddBreak([1.0 * ONE_HOUR, 07 * ONE_MINUTE, 0.09]);
+  Antiban.AddBreak([3.5 * ONE_HOUR, 45 * ONE_MINUTE, 0.85]);
+  Antiban.AddBreak([17  * ONE_HOUR, 07 * ONE_HOUR,   0.99]);
 end;
 
 function TMiner.HasBanking(): Boolean;
@@ -377,7 +380,7 @@ var
     if Random()*100 <= CHANCE_OF_MISS then
     begin
       R := Minimap.PointToMsRect(Point(MM2MS.MMCX+Random(-6,6), MM2MS.MMCY+Random(-6,6)));
-      Mouse.Move(R.Mean, Trunc(R.Radius), True);
+      Mouse.Move(R, True);
       WaitEx(65,10);
       if MainScreen.IsUpText(['Walk here', 'Mine', 'Rocks']) then
         Exit();
@@ -387,7 +390,7 @@ var
 
   function ClickRock(rect: TRectangle): Int8;
   begin
-    mouse.Move(TRA[i].Mean, Trunc(TRA[i].Radius), Random(10) = 0);
+    mouse.Move(rect, Random(10) = 0);
     WaitEx(65,10);
     if not Mainscreen.IsUpText(['Mine', 'Rocks']) then
       Exit(1);
@@ -395,19 +398,19 @@ var
     if (not MaybeMiss()) then
       Exit(0);
 
-    if (not ((Random()*100 <= 5) and ChooseOption.Select('Mine Rocks'))) and
+    if (not ((Random() <= 0.05) and ChooseOption.Select('Mine Rocks'))) and
        (not Mouse.Click(ctRed)) then
     begin
       Wait(500,6000,wdLeft);
       Self.DoAntiban;
-      WaitFatigue(Random(1000,4500), 0.6);
+      WaitFatigue(Random(1500,3000), 0.6);
       Exit(0);
     end;
 
     for 6 to Round(srl.TruncatedGauss(0,12)) do
     begin
       Mouse.Click(mouse_Left);
-      WaitEx(70,10);
+      WaitEx(65,10);
     end;
 
     WaitEx(500,70);
@@ -599,6 +602,7 @@ var
 begin
   Self.StartTime := GetTickCount();
   Self.SetupAntiban();
+  MainScreen.SetAngle(True);
 
   if Inventory.Count = 0 then
     Self.QuickDeposit := True;
@@ -640,7 +644,6 @@ begin
 
   Mouse.Speed := 10;
   Players.GetCurrent()^.Login();
-  mainscreen.SetAngle(True);
 
   Inventory.ShiftDrop := SHIFT_DROP;
 end;
@@ -1069,8 +1072,6 @@ begin
   Bot.Setup();
 
   RSW.Init(Bot.ConfigPath+CONFIG_MAP);
-  RSW.skipClose := 30;
-  RSW.minRunEnergy := 35;
   AddOnTerminate(@RSW.Free);
 
   Bot.Run();
