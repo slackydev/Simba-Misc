@@ -1,6 +1,7 @@
-program Universal_Miner_V025;
+program Universal_Miner_V026;
 {$DEFINE SMART}
 {$I SRL/OSR.simba}
+{$I SRL/utils/slackdebug.simba}
 {$I RSWalker/Walker.simba}
 {$H-}{$R+}{$X+}
 {==============================================================================]
@@ -237,166 +238,12 @@ end;
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
-// DRAWING UTILITIES
-
-function NewFont(name:String; size:Int32; fs:TFontStyles; fq:TFontQuality): TFont;
-begin
-  Result.Init();
-  Result.SetName(name);
-  Result.SetSize(size);
-  Result.SetStyle(fs);
-  Result.SetQuality(fq);
-  Result.SetColor($FFFFFF);
-end;
-
-var
-  ProggyFont     := NewFont('Tahoma', 7, [fsBold], fqCleartype);
-  PercentBarFont := NewFont('Tahoma', 7, [fsBold], fqCleartype);
-
-
-procedure TMufasaBitmap.ClearAllBut(Area: TBox);
-var
-  CLB: TBox;
-begin
-  CLB := srl.DefaultClientBounds;
-  Area.Expand(1);
-  Area.LimitTo(CLB);
-
-  Smart.Image.ClearArea(Box(CLB.X1,CLB.Y1,Area.x1,Area.y1));  //left  T
-  Smart.Image.ClearArea(Box(CLB.X1,Area.y1,Area.x1,Area.y2)); //..    M
-  Smart.Image.ClearArea(Box(CLB.X1,Area.y1,Area.x1,CLB.y2));  //..    B
-  Smart.Image.ClearArea(Box(Area.x1,CLB.Y1,Area.x2,Area.y1)); //mid   T
-  Smart.Image.ClearArea(Box(Area.x1,Area.y2,Area.x2,CLB.y2)); //..    B
-  Smart.Image.ClearArea(Box(Area.x2,CLB.Y1,CLB.x2,Area.y1));  //right T
-  Smart.Image.ClearArea(Box(Area.x2,Area.y1,CLB.x2,Area.y2)); //..    M
-  Smart.Image.ClearArea(Box(Area.x2,Area.y1,CLB.x2,CLB.y2));  //..    B
-end;
-
-procedure TMufasaBitmap.DrawText(txt:String; pt:TPoint; font:TFont;
-          color:Int32; align:Int32=0; shadow:Boolean=False; shadowDir:Byte=0); overload;
-var
-  bit:TBitmap;
-  muf:TMufasaBitmap;
-  W,H:Int32;
-begin
-  bit.Init();
-  bit.GetCanvas().SetFont(font);
-  bit.GetCanvas().GetBrush().SetStyle(bsClear);
-
-  W := bit.GetCanvas().TextWidth(txt);
-  H := bit.GetCanvas().TextHeight(txt);
-  bit.SetWidth(W+1);
-  bit.SetHeight(H+1);
-
-  if align then
-    pt := Point(pt.x-W, pt.y);
-
-  muf := self.Copy(pt.x,pt.y,pt.x+W,pt.y+H);
-  muf.DrawToCanvas(0,0,bit.getCanvas());
-
-  if Shadow then
-  begin
-    bit.getCanvas().getFont().setColor(1);
-    case ShadowDir of
-      0:bit.GetCanvas().TextOut(0,0,txt);
-      1:bit.GetCanvas().TextOut(1,0,txt);
-      2:bit.GetCanvas().TextOut(2,0,txt);
-      3:bit.GetCanvas().TextOut(2,1,txt);
-      4:bit.GetCanvas().TextOut(2,2,txt);
-      5:bit.GetCanvas().TextOut(1,2,txt);
-      6:bit.GetCanvas().TextOut(0,2,txt);
-      7:bit.GetCanvas().TextOut(0,1,txt);
-    end;
-    bit.GetCanvas().GetFont().SetColor(color);
-    bit.GetCanvas().TextOut(1,1,txt);
-  end else
-  begin
-    bit.GetCanvas().GetFont().SetColor(color);
-    bit.GetCanvas().TextOut(0,0,txt);
-  end;
-  muf.LoadFromTBitmap(bit);
-  muf.DrawTransparent(pt.x,pt.y,self);
-
-  muf.Free();
-  bit.Free();
-end;
-
-procedure TMufasaBitmap.DrawTextNL(txt:TStringArray; pos:TPoint; font:TFont;
-          color:Int32; align:Int32=0; shadow:Boolean=False; shadowDir:Byte=0);
-var
-  i,hei:Int32;
-begin
-  hei := Round(1.2 * abs(font.GetHeight()));
-  for i:=0 to High(txt) do
-  begin
-    Self.DrawText(txt[i],pos,font,color,align,shadow,shadowDir);
-    inc(pos.y,hei);
-  end;
-end;
-
-procedure TMufasaBitmap.DrawPrecentBar(pt:TPoint; w,h,percent:Int32; BgColor:Int32=986895; BarColor:Int32=1474364; lText:String=''; rText:String='');
-var
-  B:TBox;
-  tx,ty:Int32;
-begin
-  B := [pt.x,pt.y,pt.x+w-1,pt.y+h-1];
-  Self.DrawTPA(TPAFromBox(B), BgColor);
-  B.Expand(-2);
-  B.x2 := B.x1 + round(B.Width() * (percent*0.01));
-  Self.DrawTPA(TPAFromBox(B), BarColor);
-
-  tx := B.x1 + (W div 2) - 8;
-  ty := B.y1 + (H div 2) - Abs(PercentBarFont.GetHeight()) + 1;
-  Self.DrawText(ToStr(percent)+'%',Point(tx,ty),PercentBarFont,$FFFFFF);
-  Self.DrawText(lText,Point(b.x1+4,ty),  PercentBarFont,$FFFFFF,0,True,4);
-  Self.DrawText(rText,Point(pt.x+w-5,ty),PercentBarFont,$FFFFFF,1,True,4);
-end;
-
-
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
 // MINER
 
 function TMiner.GetTimeRunning(): Int64;
 begin
   if Self.StartTime = 0 then Exit(0);
   Result := GetTickCount() - Self.StartTime;
-end;
-
-procedure TMiner.DrawProggy();
-var
-  l: Int32;
-  runtime: UInt32;
-  str: TStringArray;
-  statusText: TPointArray;
-begin
-  if (ProggyArea = []) then ProggyArea := [290,9,510,62];
-
-  try
-    runtime := GetTimeRunning();
-
-    BufferImage.DrawBox(Box(290,9,510,62), True, 5389366);
-    BufferImage.DrawTPA([[290,9],[510,9],[290,62],[510,62]], 0);
-
-    BufferImage.DrawPrecentBar(
-      [295,14], 210, 20, BotStats.PrcToNextLvl, //pos, w,h, percent
-      2628890,7880503,                          //colors
-      'Lvl: '+ToString(BotStats.CurrLvl),       //left-text
-      'Lvl: '+ToString(BotStats.CurrLvl+1)      //right-text
-    );
-
-    str := ['Uptime: ' + srl.MsToTime(runtime, Time_Bare),
-            'Exp Gained: '+ srl.FormatNumber(BotStats.Gains,1)];
-    BufferImage.DrawTextNL(str, Point(295,36), ProggyFont, $FFFFFF, 0, True, 4);
-
-    str := ['Exp/Hour: ' + srl.FormatNumber(BotStats.Gains / (runtime / ONE_HOUR),1) ,
-            'Mined: ' + ToStr(BotStats.Count) + ' ores'];
-    BufferImage.DrawTextNL(str, Point(406,36), ProggyFont, $FFFFFF, 0, True, 4);
-
-    BufferImage.DrawTransparent(0,0, Smart.Image);
-  except
-    WriteLn('Error: Something went wrong');
-  end;
 end;
 
 
@@ -441,19 +288,17 @@ begin
     Players.GetCurrent()^.Login(); // if we got logged out
 end;
 
-
 procedure TMiner.PostAction(CheckAntiban: Boolean = True);
 begin
   WaitEx(500,70);
   if CheckAntiban then Self.DoAntiban;
 end;
 
-
 procedure TMiner.ProcessWhileWaiting();
 var
   n,atNextLvl,atCurrLvl:Int32;
 begin
-  BotStats.Gains := BotStats.count * BotStats.XPPerOre;
+  BotStats.Gains := BotStats.Count * BotStats.XPPerOre;
   BotStats.CurrXP  := BotStats.StartInfo.XP + BotStats.Gains;
   BotStats.CurrLvl := srl.GetLevelAtXP(Ceil(BotStats.CurrXP));
   atNextLvl := srl.GetXPAtLevel(BotStats.CurrLvl+1);
@@ -476,7 +321,7 @@ begin
     WriteLn('+----------------------------------------------------');
 
     {$IFDEF SMARTDEBUG}
-    Self.DrawProggy();
+    Smart.Image.DrawProggyAt([280,2], PROGGY_BLUE, Trunc(BotStats.CurrXP), Trunc(BotStats.Gains), BotStats.Count, 'Mining');
     {$ENDIF}
 
     StatsDebugTick := GetTickCount();
@@ -1221,6 +1066,7 @@ end;
 begin
   smart.EnableDrawing := True;
   srl.Setup([]);
+  srl.Options := [soDebugAntiban];
   AddOnTerminate(@smart.Free);
 
   Bot.Init();
