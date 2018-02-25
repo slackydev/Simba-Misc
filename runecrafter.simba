@@ -1,0 +1,446 @@
+program Runecrafter_V001;
+{$I SRL/OSR.simba}
+{$I SRL/utils/rsclient.simba}
+{$I SRL/utils/rsclient_overrides.simba}
+{$I SRL/utils/slackdebug.simba}
+{$I RSWalker/Walker.simba}
+{$I WindowOverlay/WindowOverlay.simba}
+{$H-}
+{==============================================================================]
+| Slacky's Runecrafter
+|
+| Steps to use:
+|   1. Declare user details bellow, set which Altar, and bankslot for essence.
+|   2. Start the script wherever
+|
+| Any issues starting it: Re-target RS, and try again, may help if you log in
+| manually before starting it at first.
+[==============================================================================}
+type
+  ERuneAltar = (AirAltar, MindAltar, WaterAltar, EarthAltar, FireAltar);
+
+const
+  LOGIN_NAME = '';
+  LOGIN_PASS = '';
+  RS_WORLD   = -1;           // preferred world, -1 = random world
+  IS_MEMBER  = FALSE;        // TRUE or FALSE
+
+  RUN_ALTAR  = FireAltar;   // Which altar?
+  BANK_SLOT  = 0;           // Where's the essence?
+
+type
+  TAltarLocations = record
+    BankLocation: TPoint;
+    BankerType: EBankLocation;
+
+    RuinsWalkTo: TPoint;
+    RuinsMiddle: TPoint;
+    AltarPortal: TPoint;
+    AltarMiddle: TPoint;
+  end;
+
+  TStatistics = record
+    Count: Int32;
+    StartInfo: TSkillInfo;
+    PrcToNextLvl, Rem, CurrLvl, CurrXP, Gains, XPPer: Double;
+    DismissedRandoms: Int32;
+  end;
+
+  TRunecrafter = record
+    BotStats: TStatistics;
+    StatsDebugTick: Int64;
+
+    Antiban: TAntiban;
+    Altar: TAltarLocations;
+  end;
+
+var
+  Bot: TRunecrafter;
+  RSW: TRSWalker;
+  RSWAltars: TRSWalker;
+
+  {$ifdecl TWindowOverlay}
+  Overlay: TWindowOverlay;
+  Debug: TMufasaBitmap;
+  {$endif}
+
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// OVERRIDES AND METHODS FOR FATIGUE
+
+procedure Wait(min, max:Double; weight:EWaitDir=wdMean); override;
+var t: Double;
+begin
+  t := PerformanceTimer();
+  inherited(min, max, weight);
+  Bot.Antiban.WaitFatigue(PerformanceTimer()-t);
+end;
+
+procedure WaitEx(mean, dev:Double); override;
+var t: Double;
+begin
+  t := PerformanceTimer();
+  inherited(mean, dev);
+  Bot.Antiban.WaitFatigue(PerformanceTimer()-t);
+end;
+
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// FISHER
+
+procedure TRunecrafter.DeclarePlayers();
+begin
+  with Players.New()^ do
+  begin
+    LoginName  := LOGIN_NAME;
+    Password   := LOGIN_PASS;
+    IsActive   := True;
+    IsMember   := IS_MEMBER;
+    World      := RS_WORLD;
+  end;
+  Players.SetCurrent(0);
+end;
+
+procedure TRunecrafter.DoAntiban();
+begin
+  srl.DismissRandom();
+  if Self.Antiban.DoAntiban() then
+    Players.GetCurrent()^.Login(); // if we got logged out, and not logged back in
+end;
+
+procedure TRunecrafter.PostAction(AntiBan:Boolean=True);
+begin
+  Wait(250,2000, wdLeft);
+  Self.Antiban.WaitFatigue(Random(700,1200));
+
+  if AntiBan then Self.DoAntiban;
+end;
+
+
+procedure TRunecrafter.ProcessWhileWaiting();
+var
+  n,atNextLvl,atCurrLvl:Int32;
+begin
+  BotStats.Gains := BotStats.Count * BotStats.XPPer;
+  BotStats.CurrXP  := BotStats.StartInfo.XP + BotStats.Gains;
+  BotStats.CurrLvl := srl.GetLevelAtXP(Ceil(BotStats.CurrXP));
+  atNextLvl := srl.GetXPAtLevel(Trunc(BotStats.CurrLvl)+1);
+  atCurrLvl := srl.GetXPAtLevel(Trunc(BotStats.CurrLvl));
+  BotStats.Rem := atNextLvl - BotStats.CurrXP;
+  BotStats.PrcToNextLvl := 100 - Round((BotStats.Rem / (atNextLvl - atCurrLvl)) * 100);
+
+  if GetTickCount() - StatsDebugTick > 2000 then
+  begin
+    ClearDebug();
+    WriteLn('+---| STATS |----------------------------------------');
+    WriteLn('|- Bars Made           : ', BotStats.Count);
+    WriteLn('|- Experience Gained   : ', Round(BotStats.Gains,2));
+    WriteLn('|- Experience Per Hour : ', Round(BotStats.Gains / (GetTimeRunning()/1000/60/60)) );
+    WriteLn('|- Runecrafting Level  : ', Round(BotStats.CurrLvl,2));
+    WriteLn('|- Dismissed Randoms   : ', BotStats.DismissedRandoms);
+    WriteLn('|- Time Since Break    : ', SRL.MsToTime(Antiban.TimeSinceBreak, Time_Short));
+    WriteLn('|- Energy Level        : ', Round(Antiban.EnergyLevel,2));
+    WriteLn('|- Script Runtime      : ', SRL.MsToTime(GetTimeRunning, Time_Short));
+    WriteLn('+----------------------------------------------------');
+
+    {$ifdecl TWindowOverlay}
+    Debug.DrawSkillReport([288,3], clProgBrown, Trunc(BotStats.CurrXP), Trunc(BotStats.Gains), BotStats.Count, 'Runecrafting');
+    {$ENDIF}
+
+    Self.StatsDebugTick := GetTickCount();
+  end;
+  Self.DoAntiban;
+end;
+
+function TRunecrafter.WalkGetRect(Loc: TPoint; Walker:TRSWalker; Height:Int32=0; UseWeb:Boolean=False): TRectangle;
+var
+  me: TPoint := Walker.GetMyPos();
+begin
+    Result := Walker.GetTileMSEx(me, Loc, Height);
+    if (me.DistanceTo(loc) > 20) or (not MainScreen.GetBounds.Contains(Result.Bounds)) then
+    begin
+      if not UseWeb then
+        Walker.WalkPath([Loc])
+      else
+        Walker.WebWalk(Loc,4,0.3);
+      Result := Walker.GetTileMS(Loc, Height);
+    end;
+end;
+
+function TRunecrafter.FindPortalNear(B: TBox): TRectangle;
+var
+  TPA: TPointArray;
+  ATPA: T2DPointArray;
+begin
+  B.LimitTo(MainScreen.GetBounds);
+  while Length(TPA) < 10 do
+    TPA := SRL.GetPixelShiftTPA(B, 100, 4);
+  ATPA := TPA.Cluster(3);
+  ATPA.SortByMiddle(B.Middle);
+  Result := ATPA[0].MinAreaRect;
+  {$ifdecl TWindowOverlay}
+  Debug.DrawTPA(ATPA[0], Random($FFFFFF));
+  {$ENDIF}
+end;
+
+function TRunecrafter.EnterAltar(): Boolean;
+var
+  rect: TRectangle;
+  altarPoints: TPointArray;
+begin
+  Self.WalkGetRect(Altar.RuinsWalkTo, RSW, 4, True);
+  rect := RSW.GetTileMS(Altar.RuinsMiddle,4);
+  Mouse.Move(rect, True);
+  Wait(60,140);
+  if MainScreen.IsUpText('Mysterious') then
+    if not Mouse.Click(ctRed) then
+      Exit(False);
+
+  repeat
+    Wait(60,120);
+    Self.DoAntiban();
+  until RSWAltars.GetMyPos.DistanceTo(Altar.AltarPortal) < 60;
+  Wait(200,2000, wdLeft);
+
+  for 0 to 3 do
+  begin
+    rect := Self.WalkGetRect(Altar.AltarMiddle, RSWAltars, 4);
+    Mouse.Move(rect, True);
+    Wait(30,500, wdLeft);
+    if MainScreen.IsUpText('Altar') and Mouse.Click(ctRed) then
+    begin
+      repeat
+        Wait(60,120);
+        Self.DoAntiban();
+      until (not Inventory.IsFull());
+
+      Wait(500,1600, wdLeft);
+      while srl.IsAnimating(MainScreen.GetPlayerBox, 900, 350, 3) do
+        WaitEx(250,40);
+      Break;
+    end;
+  end;
+  Result := True;
+  Self.PostAction();
+end;
+
+function TRunecrafter.Return(): Boolean;
+var
+  me: TPoint;
+  rect: TRectangle;
+  t: TCountDown;
+begin
+  for 0 to 3 do
+  begin
+    rect := Self.WalkGetRect(Altar.AltarPortal, RSWAltars);
+    rect := Self.FindPortalNear(rect.Expand(18).Bounds);
+    Mouse.Move(rect);
+    Wait(30,500, wdLeft);
+    if MainScreen.IsUpText('Portal') then
+    begin
+      Mouse.Click(mouse_left);
+      Result := True;
+    end else
+    begin
+      Wait(400,4000,wdLeft);
+      Continue;
+    end;
+
+    t.Init(Random(2700,3300));
+    repeat
+      Wait(120,220);
+      Self.DoAntiban();
+      if (RSW.GetMyPos.DistanceTo(Altar.RuinsMiddle) < 40) then
+        Break(2);
+    until t.IsFinished();
+
+    {$ifdecl TWindowOverlay}
+    Debug.Clear();
+    {$ENDIF}
+  end;
+
+  {$ifdecl TWindowOverlay}
+  Debug.Clear();
+  {$ENDIF}
+  Wait(100,1500, wdLeft);
+  Self.PostAction();
+end;
+
+procedure TRunecrafter.DoBanking();
+begin
+  WriteLn(Altar.BankLocation);
+  RSW.WebWalk(Altar.BankLocation,4,0.3);
+
+  for 0 to 3 do
+    if BankScreen.Open(Altar.BankerType)
+    then Break
+    else Wait(100,400);
+
+  if not BankScreen.IsOpen() then
+    TerminateScript('The bank has failed us!');
+
+  BankScreen.DepositAll();
+  Wait(20,1000, wdLeft);
+  if not BankScreen.Withdraw(BANK_SLOT, WITHDRAW_ALL, ['essence']) then
+    TerminateScript('Cant withdraw item!');
+
+  if Random() < 0.1 then
+  begin
+    Wait(20,1000, wdLeft);
+    BankScreen.Close;
+  end;
+
+  Self.PostAction();
+end;
+
+
+// Runs the bot
+//
+procedure TRunecrafter.Run();
+var
+  x: TSkillInfo;
+begin
+  MainScreen.SetAngle(True);
+  Self.BotStats.StartInfo := Stats.GetSkillInfo(SKILL_RUNECRAFTING);
+  Self.ProcessWhileWaiting();
+
+  while srl.IsLoggedIn() do
+  begin
+    if not Inventory.IsFull() then
+    begin
+      Self.BotStats.Count += srl.GetItemAmount(Inventory.GetSlotBox(0));
+      if (Self.BotStats.XPPer <= 0) and (Self.BotStats.Count > 0) then
+      begin
+        x := Stats.GetSkillInfo(SKILL_RUNECRAFTING);
+        Self.BotStats.XPPer := x.XP-BotStats.StartInfo.XP;
+        Self.BotStats.XPPer := Self.BotStats.XPPer / Self.BotStats.Count;
+      end;
+      Self.DoBanking();
+    end;
+    Self.ProcessWhileWaiting();
+
+    if not Self.EnterAltar() then
+    begin
+      Wait(200,2000, wdLeft);
+      if not Self.EnterAltar() then
+        TerminateScript('Failed to enter altar');
+    end;
+    Self.ProcessWhileWaiting();
+
+    if not Self.Return() then
+    begin
+      Wait(200,2000, wdLeft);
+      if not Self.Return() then
+        TerminateScript('Failed to return from altar');
+    end;
+
+    Self.ProcessWhileWaiting();
+  end;
+end;
+
+procedure TRunecrafter.SetupAntiban();
+begin
+  Antiban.Init(SKILL_RUNECRAFTING, 4);
+
+  Antiban.AddTask([@Antiban.LoseFocus,     ONE_MINUTE*5]);
+  Antiban.AddTask([@Antiban.HoverPlayers,  ONE_MINUTE*8]);
+  Antiban.AddTask([@Antiban.CheckSkill,    ONE_MINUTE*9]);
+  Antiban.AddTask([@Antiban.CheckStats,    ONE_MINUTE*10]);
+  Antiban.AddTask([@Antiban.OpenRandomTab, ONE_MINUTE*10]);
+  Antiban.AddTask([@Antiban.VeryShortBreak,ONE_MINUTE*25]);
+  Antiban.AddTask([@Antiban.DoMiscStuff,   ONE_MINUTE*25]);
+  Antiban.AddTask([@Antiban.RandomCompass, ONE_MINUTE*45]);
+
+  Antiban.AddBreak([01 * ONE_HOUR,   07 * ONE_MINUTE, 0.05, 0.25]);
+  Antiban.AddBreak([04 * ONE_HOUR,   45 * ONE_MINUTE, 0.85, 0.15]);
+  Antiban.AddBreak([17 * ONE_HOUR,   07 * ONE_HOUR,   0.99, 0.10]);
+end;
+
+procedure TRunecrafter.Init();
+begin
+  {$ifdecl TWindowOverlay}
+  Overlay := TWindowOverlay.Create();
+  Overlay.PaintInterval(100);
+  Debug := Overlay.ToMufasaBitmap();
+  {$endif}
+
+  RSW.Init('world.png');
+  RSWAltars.Init('Altars.png');
+  RSWAltars.MemScanEnabled := False;
+
+  self.DeclarePlayers();
+  self.SetupAntiban();
+  Players.GetCurrent()^.Login();
+
+  case RUN_ALTAR of
+    AirAltar:
+      begin
+        Altar.BankerType   := blFaladorEast;
+        Altar.BankLocation := P_FALADOR_EBANK;
+        Altar.RuinsWalkTo  := [3758, 3278];
+        Altar.RuinsMiddle  := [3750, 3282];
+        Altar.AltarPortal  := [1524, 257];
+        Altar.AltarMiddle  := [1536, 232];
+      end;
+    MindAltar:
+      begin
+        Altar.BankerType   := blFaladorWest;
+        Altar.BankLocation := P_FALADOR_WBANK;
+        Altar.RuinsWalkTo  := [3730, 2400];
+        Altar.RuinsMiddle  := [3738, 2392];
+        Altar.AltarPortal  := [1330, 261];
+        Altar.AltarMiddle  := [1302, 207];
+      end;
+    WaterAltar:
+      begin
+        Altar.BankerType   := blDrynor;
+        Altar.BankLocation := P_DRYNOR;
+        Altar.RuinsWalkTo  := [4542, 3793];
+        Altar.RuinsMiddle  := [4548, 3790];
+        Altar.AltarPortal  := [1066, 241];
+        Altar.AltarMiddle  := [1023, 225];
+      end;
+    EarthAltar:
+      begin
+        Altar.BankerType   := blVarrockEast;
+        Altar.BankLocation := P_VARROCK_EBANK;
+        Altar.RuinsWalkTo  := [5030, 2561];
+        Altar.RuinsMiddle  := [5034, 2553];
+        Altar.AltarPortal  := [778, 253];
+        Altar.AltarMiddle  := [790, 205];
+      end;
+    FireAltar:
+      begin
+        Altar.BankerType   := blAlKharid;
+        Altar.BankLocation := P_ALKHARID_BANK;
+        Altar.RuinsWalkTo  := [5058, 3437];
+        Altar.RuinsMiddle  := [5062, 3430];
+        Altar.AltarPortal  := [455, 169];
+        Altar.AltarMiddle  := [499, 217];
+      end;
+  end;
+end;
+
+procedure TRunecrafter.Free();
+begin
+  RSW.Free();
+  RSWAltars.Free();
+
+  {$ifdecl TWindowOverlay}
+  Overlay.Free();
+  Debug.Free();
+  {$endif}
+end;
+
+
+begin
+  srl.SetupForClient([]);
+  srl.Options := [soDebugAntiban];
+  RSClient.SetFocus();
+
+  bot.Init();
+  AddOnTerminate(@bot.Free);
+  bot.Run();
+end.
