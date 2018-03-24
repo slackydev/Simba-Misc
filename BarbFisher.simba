@@ -1,4 +1,4 @@
-program BarbFlyFisher_V001;
+program BarbFlyFisher_V003;
 {$I SRL/OSR.simba}
 {$I SRL/utils/rsclient.simba}
 {$I SRL/utils/rsclient_overrides.simba}
@@ -15,17 +15,17 @@ program BarbFlyFisher_V001;
 | Any issues starting it: Re-target RS, and try again, may help if you log
 | in manually before starting it.
 |
-| Banking may not work very well, at times it will fail.
+| Banking might not work very well.
 [==============================================================================}
 type
   TFisherStyle = (FishCookBank, FishCookDrop, FishDrop);
 
 const
-  LOGIN_NAME = '';
-  LOGIN_PASS = '';
+  LOGIN_NAME = 'yourname';
+  LOGIN_PASS = 'yourpass';
   RS_WORLD   = -1;           // preferred world, -1 = random world
   IS_MEMBER  = FALSE;        // TRUE or FALSE
-  STYLE      = FishCookDrop; // FishCookBank or FishCookDrop, FishDrop
+  STYLE      = FishCookBank; // FishCookBank or FishCookDrop, FishDrop
 
 type
   TFisher = record
@@ -118,7 +118,7 @@ begin
     WriteLn('+---| STATS |----------------------------------------');
     WriteLn('|- Script Runtime    : ', SRL.MsToTime(GetTimeRunning, Time_Short));
     WriteLn('|- Time Since Break  : ', SRL.MsToTime(Antiban.TimeSinceBreak(), Time_Short));
-    WriteLn('|- Past Breaks Sum   : ', SRL.MsToTime(Antiban.ResidualBreakValue(), Time_Short));
+    //WriteLn('|- Recent Break Len  : ', SRL.MsToTime(Antiban.ResidualBreakValue(), Time_Short));
     WriteLn('|- Energy Level      : ', Round(Antiban.EnergyLevel,2));
     WriteLn('+----------------------------------------------------');
     Self.StatsDebugTick := GetTickCount();
@@ -264,7 +264,7 @@ begin
     Exit;
 
   if Distance(Point(4230,2718), RSW.GetMyPos) > 8 then
-    RSW.WebWalk([4230,2718],2);
+    RSW.WebWalk(Point(4230,2718), 2);
 
   while ((arr := Inventory.FindItem(RawTrout) + Inventory.FindItem(RawSalmon)) <> []) do
   begin
@@ -315,7 +315,7 @@ var
   // Deposits all the fish in our inventory, cooked, raw and burnt.
   procedure Deposit();
   begin
-    RSW.WebWalk(P_EDGEVILLE, 3);
+    RSW.WebWalk(locEdgevilleBank, 3);
     for 0 to 2 do
       if BankScreen.Open(blEdgeville) then
         Break
@@ -382,9 +382,9 @@ begin
     if not self.Fish() then
     begin
       if RSW.GetMyPos.DistanceTo([4245, 2716]) > 20 then
-        RSW.WebWalk([4245, 2716],3)
+        RSW.WebWalk(Point(4245, 2716),3)
       else
-        RSW.WebWalk([4223, 2748],3);
+        RSW.WebWalk(Point(4223, 2748),3);
       Wait(700,1200);
     end;
 
