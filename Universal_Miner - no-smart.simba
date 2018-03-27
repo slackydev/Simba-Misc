@@ -1,4 +1,4 @@
-program Universal_Miner_V028;
+program Universal_Miner_V040;
 {$I SRL/OSR.simba}
 {$I SRL/utils/rsclient.simba}
 {$I SRL/utils/rsclient_overrides.simba}
@@ -24,12 +24,17 @@ const
   SHIFT_DROP   = True;        // use shift to drop
   INTENSE_DROP = dsAdaptive;  // dsIntense, and dsAdaptive = mine some drop some (can be higher XP)
 
+  INTENSITY_LEVEL = 80;       // min energy before intensive dropping is disabled
+  CHANCE_OF_MISS  = 0;        // % fraction chance of clicking a nearby point;
+  MINING_TIMEOUT  = 35000;    // max time it takes to mine a rock
+
+  SLEEP_AT_CLOCK  = '07:00';  // when does the bot go to bed?
+
+
+  // --- Probably dont wanna touch bellow here ---------------------------------
   CONFIG_PATH = IncludePath+'Universal_Miner/';
   CONFIG_FILE = 'config.cfg';
   CONFIG_MAP  = 'map.png';
-
-  INTENSITY_LEVEL = 88;
-  CHANCE_OF_MISS = 1;
 
 type
   TClickHistory = record
@@ -55,14 +60,18 @@ type
     QuickDeposit: Boolean;
     BotStats: TStatistics;
     StatsDebugTick: Int64;
+    StatsDebugArea: TBox;
 
     RockSpots,  BankSpots: TPointArray;
     RockColors, BankColors: array of TCTS2Color;
     BankPath: TPointArray;
 
-    ClickOrder: TClickHistory;
+    Offset: Vector2;
 
-    Antiban: TAntiban;
+    ClickOrder: TClickHistory;
+    FailCount: Int32;
+
+    Antiban, StockAB: TAntiban;
   end;
 
 
@@ -149,27 +158,33 @@ end;
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
-// OVERRIDES AND METHODS FOR FATIGUE
+// Extensions to TAntiban
 
-procedure WaitFatigue(t: Double; Exp: Double=0.2);
+procedure TAntiban.EnergyAdjustInterval(Base: TAntiban; Fact:Double);
+var
+  z,e: Double;
+  i: Int32;
 begin
-  System.Wait(Trunc(2*t * (1-Power(System.Max(0.0001, Bot.Antiban.EnergyLevel/100),Exp))));
+  e := 1 - Self.EnergyLevel / 100;
+  for i:=0 to High(Self.Tasks) do
+  begin
+    z := Base.Tasks[i].Interval;
+    Self.Tasks[i].Interval := z-z*e*fact;
+  end;
 end;
 
 procedure Wait(min, max:Double; weight:EWaitDir=wdMean); override;
-var t:Double;
+var t:Double := GetTickCount();
 begin
-  t := PerformanceTimer();
   inherited(min, max, weight);
-  WaitFatigue(PerformanceTimer()-t,0.2);
+  Bot.Antiban.WaitFatigue(GetTickCount() - t);
 end;
 
 procedure WaitEx(mean, dev:Double); override;
-var t:Double;
+var t:Double := GetTickCount();
 begin
-  t := PerformanceTimer();
   inherited(mean, dev);
-  WaitFatigue(PerformanceTimer()-t, 0.2);
+  Bot.Antiban.WaitFatigue(GetTickCount() - t);
 end;
 
 
@@ -191,20 +206,32 @@ begin
 end;
 
 procedure TMiner.SetupAntiban();
+var
+  i:Int32;
+  sum: Double;
 begin
-  Antiban.Init(SKILL_MINING);
-  Antiban.AddTask([@Antiban.LoseFocus,     ONE_MINUTE*7, 0.15]);
-  Antiban.AddTask([@Antiban.HoverPlayers,  ONE_MINUTE*9, 0.15]);
-  Antiban.AddTask([@Antiban.CheckSkill,    ONE_MINUTE*13, 0.15]);
-  Antiban.AddTask([@Antiban.CheckStats,    ONE_MINUTE*18, 0.15]);
-  Antiban.AddTask([@Antiban.OpenRandomTab, ONE_MINUTE*20, 0.15]);
-  Antiban.AddTask([@Antiban.RandomCompass, ONE_MINUTE*40, 0.15]);
-  Antiban.AddTask([@Antiban.DoMiscStuff,   ONE_MINUTE*45, 0.15]);
-  Antiban.AddTask([@Antiban.VeryShortBreak,ONE_MINUTE*50, 0.15]);
+  StockAB.Init(SKILL_MINING);
 
-  Antiban.AddBreak([1.0 * ONE_HOUR, 07 * ONE_MINUTE, 0.09]);
-  Antiban.AddBreak([3.5 * ONE_HOUR, 40 * ONE_MINUTE, 0.85]);
-  Antiban.AddBreak([17  * ONE_HOUR, 07 * ONE_HOUR,   0.99]);
+  StockAB.AddTask([@Antiban.LoseFocus,         ONE_MINUTE*8,  0.20]);
+  StockAB.AddTask([@Antiban.HoverPlayers,      ONE_MINUTE*10, 0.20]);
+  StockAB.AddTask([@Antiban.CheckSkill,        ONE_MINUTE*13, 0.20]);
+  StockAB.AddTask([@Antiban.CheckStats,        ONE_MINUTE*18, 0.20]);
+  StockAB.AddTask([@Antiban.OpenRandomTab,     ONE_MINUTE*20, 0.20]);
+  StockAB.AddTask([@Antiban.RandomCompassNESW, ONE_MINUTE*40, 0.25]);
+  StockAB.AddTask([@Antiban.DoMiscStuff,       ONE_MINUTE*45, 0.25]);
+  StockAB.AddTask([@Antiban.VeryShortBreak,    ONE_MINUTE*50, 0.25]);
+
+  StockAB.AddBreak([2.0 * ONE_HOUR, 05 * ONE_MINUTE, 0.50, 0.33]);
+  StockAB.AddBreak([4.0 * ONE_HOUR, 40 * ONE_MINUTE, 0.96, 0.20]);
+  StockAB.AddBreak([16  * ONE_HOUR, 08 * ONE_HOUR,   0.99, 0.03]);
+
+  Antiban := StockAB.Copy();
+  with Antiban.Breaks[High(Antiban.Breaks)] do
+    NextAtTime := Antiban.TimeRunningAtClock(SLEEP_AT_CLOCK, '00:25');
+
+  for i:=0 to High(Antiban.Tasks) do
+    sum += ONE_HOUR / Antiban.Tasks[i].Interval;
+  WriteLn('Doing ',Round(sum,2),' antibans per hour');
 end;
 
 function TMiner.HasBanking(): Boolean;
@@ -213,11 +240,21 @@ begin
 end;
 
 procedure TMiner.DoAntiban();
+var
+  Id: Int32;
 begin
-  if Self.Antiban.DoAntiban() then
-    Players.GetCurrent()^.Login();
-end;
+  if Self.Antiban.DoBreak(Id) and (Id = Self.Antiban.GetSleepId()) then
+  begin
+    // Reset the sleeptimer after having performed a sleep
+    // to about 07:30 / 7:30am +/- 25 min normal variation
+    Self.Antiban.Breaks[Id].NextAtTime := Self.Antiban.TimeRunningAtClock(SLEEP_AT_CLOCK, '00:25');
+  end;
 
+  if Self.Antiban.DoAntiban(False) then
+    Players.GetCurrent()^.Login();
+
+  Antiban.EnergyAdjustInterval(Self.StockAB, 0.35);
+end;
 
 procedure TMiner.PostAction(CheckAntiban: Boolean = True);
 begin
@@ -225,12 +262,11 @@ begin
   if CheckAntiban then Self.DoAntiban;
 end;
 
-
 procedure TMiner.ProcessWhileWaiting();
 var
   n,atNextLvl,atCurrLvl:Int32;
 begin
-  BotStats.Gains := BotStats.count * BotStats.XPPerOre;
+  BotStats.Gains   := BotStats.count * BotStats.XPPerOre;
   BotStats.CurrXP  := BotStats.StartInfo.XP + BotStats.Gains;
   BotStats.CurrLvl := srl.GetLevelAtXP(Ceil(BotStats.CurrXP));
   atNextLvl := srl.GetXPAtLevel(BotStats.CurrLvl+1);
@@ -242,18 +278,21 @@ begin
   begin
     ClearDebug();
     WriteLn('+---| STATS |----------------------------------------');
+    WriteLn('|- Script Runtime      : ', SRL.MsToTime(GetTimeRunning, Time_Short));
     WriteLn('|- Trips / Drops       : ', BotStats.Trips);
     WriteLn('|- Ores Mined          : ', BotStats.Count);
     WriteLn('|- Experience Gained   : ', BotStats.Gains);
     WriteLn('|- Experience Per Hour : ', Round(BotStats.Gains / (GetTimeRunning()/1000/60/60)) );
+    WriteLn('+----------------------------------------------------');
+    WriteLn('|- Current Map Offset  : ', Self.Offset);
     WriteLn('|- Dismissed Randoms   : ', BotStats.DismissedRandoms);
-    WriteLn('|- Time Since Break    : ', SRL.MsToTime(Self.Antiban.TimeSinceBreak, Time_Short));
-    WriteLn('|- Energy Level        : ', Self.Antiban.EnergyLevel);
-    WriteLn('|- Script Runtime      : ', SRL.MsToTime(GetTimeRunning, Time_Short));
+    WriteLn('|- Energy (profile)    : ', Round(Antiban.EnergyLevel,2), '%  (', Round(Antiban.Patience,3), ', ', Round(Antiban.Endurance,3),')');
+    WriteLn('|- Time Since Break    : ', SRL.MsToTime(Antiban.TimeSinceBreak, Time_Short));
+    WriteLn('|- Time Till Sleep     : ', SRL.MsToTime(Trunc(Antiban.Breaks[Antiban.GetSleepId].NextAtTime - Antiban.TimeRunning), Time_Short));
     WriteLn('+----------------------------------------------------');
 
     {$ifdecl TWindowOverlay}
-    Debug.DrawSkillReport([288,3], clProgBrown, Trunc(BotStats.CurrXP), Trunc(BotStats.Gains), BotStats.Count, 'Mining');
+    StatsDebugArea := Debug.DrawSkillReport([288,3], clProgBrown, Trunc(BotStats.CurrXP), Trunc(BotStats.Gains), BotStats.Count, 'Mining');
     {$ENDIF}
 
     StatsDebugTick := GetTickCount();
@@ -261,20 +300,19 @@ begin
   Self.DoAntiban;
 end;
 
-
-function TMiner.Contains(R: TRectangle; Colors: array of TCTS2Color): Boolean;
+function TMiner.CountColors(R: TRectangle; Colors: array of TCTS2Color; Estimate:Boolean=True): Int32;
 var
   TPA: TPointArray;
   i, count: Int32;
 begin
   for i:=0 to High(Colors) do
   begin
-    count += srl.FindColors(TPA, Colors[i], R.Bounds);
-    if count > 100 then  //XXXXXXXXXXXX
-      Exit(True);
+    count := srl.FindColors(TPA, Colors[i], R.Bounds);
+    if not Estimate then
+      count := Length(R.Filter(TPA));
+    Result += Count;
   end;
 end;
-
 
 function TMiner.Find(Locations: TPointArray): TRectArray;
 var
@@ -283,19 +321,63 @@ var
   rect: TRectangle;
 begin
   me := RSW.GetMyPos();
+
   for i:=0 to High(Locations) do
   begin
-    rect := RSW.GetTileMSEx(me, Locations[i], 0,0,0).Expand(-2);
+    rect := RSW.GetTileMSEx(me, Locations[i], Offset.X, Offset.Y, 1).Expand(-2);
     if MainScreen.GetBounds.Contains(rect.Bounds) then
       Result += rect;
   end;
 
-  if (Length(Result) = 0) and srl.isLoggedIn() then
-    TerminateScript('Not close enough to objects: ('+ ToStr(me.x) +','+ToStr(me.y)+') -> '+ ToStr(locations))
-  else if not srl.isLoggedIn() then
+  if (Length(Result) = 0) then
   begin
-    Players.GetCurrent()^.Login();
-    Result := Self.Find(Locations);
+    if (Self.FailCount in [2,6]) then
+      Minimap.RandomCompass(0,359)
+    else if (Self.FailCount = 7) then
+    begin
+      WriteLn('Trying to recover from failure');
+      Logout.ClickLogout();
+      Wait(5000,30000,wdLeft);
+      Players.GetCurrent^.Login();
+      MainScreen.SetAngle(True);
+      WaitEx(500,150);
+    end else if (Self.FailCount > 10) then
+      TerminateScript('Not close enough to objects: ('+ ToStr(me.x) +','+ToStr(me.y)+') -> '+ ToStr(locations));
+
+    Inc(Self.FailCount);
+    WaitEx(1600,450);
+  end else
+    Self.FailCount := 0;
+end;
+
+procedure TMiner.SetBestOffset(Locations: TPointArray; Colors:array of TCTS2Color);
+var
+  i: Int32;
+  x,y,sum, best: Double;
+  rect: TRectangle;
+  me: TPoint;
+begin
+  me := RSW.GetMyPos();
+  x := -1.8;
+  while (x <= 1.8) do begin
+    y := -1.8;
+    while (y <= 1.8) do begin
+      sum := 0;
+      for i:=0 to High(Locations) do
+      begin
+        rect := RSW.GetTileMSEx(me, Locations[i], X,Y, 1);
+        if MainScreen.GetBounds.Contains(rect.Bounds) then
+          sum += Self.CountColors(rect, Colors+CTS2(5263446,16), False);
+      end;
+
+      if sum > best then
+      begin
+        best := sum;
+        Self.Offset := [x,y];
+      end;
+      y += 0.2;
+    end;
+    x += 0.2;
   end;
 end;
 
@@ -313,7 +395,7 @@ var
     R: TRectangle;
   begin
     Result := True;
-    if Random()*100 <= CHANCE_OF_MISS then
+    if Random() <= CHANCE_OF_MISS then
     begin
       R := Minimap.PointToMsRect(Point(MM2MS.MMCX+Random(-6,6), MM2MS.MMCY+Random(-6,6)));
       Mouse.Move(R, True);
@@ -334,20 +416,22 @@ var
     if (not MaybeMiss()) then
       Exit(0);
 
-    if (not ((Random() <= 0.05) and ChooseOption.Select('Mine Rocks'))) and
-       (not Mouse.Click(ctRed)) then
+    if (Random() <= 0.05) and ChooseOption.Select('Mine Rocks') then
+      ClickOrder.Push(TRA[i])
+    else if Mouse.Click(ctRed) then
+    begin
+      ClickOrder.Push(TRA[i]);
+      for 6 to Round(srl.TruncatedGauss(0,12)) do
+      begin
+        Mouse.Click(mouse_Left);
+        WaitEx(65,10);
+      end;
+    end else
     begin
       Wait(400,7000,wdLeft);
       Self.DoAntiban;
-      WaitFatigue(Random(1500,3000), 0.6);
+      Antiban.WaitFatigue(Random(1500,3000), 0.6);
       Exit(0);
-    end;
-
-    ClickOrder.Push(TRA[i]);
-    for 6 to Round(srl.TruncatedGauss(0,12)) do
-    begin
-      Mouse.Click(mouse_Left);
-      WaitEx(65,10);
     end;
 
     WaitEx(300,60);
@@ -355,8 +439,17 @@ var
   end;
 
 begin
+  {$ifdecl TWindowOverlay}
+  Debug.ClearAllBut(Self.StatsDebugArea);
+  {$endif}
+
   invCount := Inventory.Count;
-  TRA := Find(self.RockSpots);
+  TRA := Self.Find(self.RockSpots);
+
+  {$ifdecl TWindowOverlay}
+  for i:=0 to High(TRA) do
+    Debug.DrawRect(TRA[i], 255);
+  {$endif}
 
   if (Self.BotStats.StartInfo = []) and (Self.BotStats.XPPerOre = 0) then
   begin
@@ -366,10 +459,10 @@ begin
 
   for i:=0 to High(TRA) do
   begin
-    if not Contains(TRA[i], Self.RockColors) then
+    if Self.CountColors(TRA[i], Self.RockColors) < 100 then
       Continue;
 
-    WaitFatigue(Random(700,1200), 0.1);
+    Antiban.WaitFatigue(Random(700,1200), 0.5);
     case ClickRock(TRA[i]) of
       0: Exit;
       1: Continue;
@@ -383,14 +476,14 @@ begin
         Mouse.Move(next, Random() < 0.1)
       else if(Random() < 0.05) then
       begin
-         Mouse.Move(srl.DefaultClientBounds, True, rndRandom);
-         WaitFatigue(5000, 0.6);
+        Mouse.Move(srl.DefaultClientBounds, True, rndRandom);
+        Antiban.WaitFatigue(5000);
       end;
     end;
 
     TRA := Find(self.RockSpots); // update the TRA in case we moved
-    T.Init(srl.NormalRange(20000,25000)); //XXXXXXXXXXXX
-    while (not T.IsFinished) and Contains(TRA[i], Self.RockColors) do
+    T.Init(Trunc(srl.NormalRange(MINING_TIMEOUT, MINING_TIMEOUT*1.25)));
+    while (not T.IsFinished) and (Self.CountColors(TRA[i], Self.RockColors) > 100) do
     begin
       if(Chatbox.GotLevelUp()) then
         if(Random(9) = 0) then
@@ -424,10 +517,9 @@ procedure TMiner.DoBanking();
   function OpenBank(): Boolean;
   var Rect: TRectangle;
   begin
-    for 0 to 3 do
-    begin
+    for 0 to 3 do begin
       for Rect in Find(self.BankSpots) do
-        if Contains(Rect, Self.BankColors) and
+        if (Self.CountColors(Rect, Self.BankColors) > 100) and
            BankScreen.OpenAt(srl.RandomPoint(Rect.Mean, Trunc(Rect.Radius))) then
           Exit(True);
       Wait(800,1300);
@@ -472,6 +564,10 @@ procedure TMiner.DoBanking();
   end;
 
 begin
+  {$ifdecl TWindowOverlay}
+  Debug.ClearAllBut(Self.StatsDebugArea);
+  {$endif}
+
   if(not Walk(self.BankPath)) then
     TerminateScript('Failed to walk path [1]');
   Self.DoAntiban;
@@ -525,6 +621,7 @@ end;
 procedure TMiner.Run();
 var
   loc: TPoint;
+  timer: TCountDown;
 
   procedure TryDropWhileMining();
   begin
@@ -532,14 +629,13 @@ var
     begin
       if (INTENSE_DROP = dsIntense) then
         Self.IntenseDrop(@Self.DoWork)
-      else if (INTENSE_DROP = dsAdaptive) and (Self.Antiban.EnergyLevel > INTENSITY_LEVEL) then
+      else if (INTENSE_DROP = dsAdaptive) and (Antiban.EnergyLevel > INTENSITY_LEVEL) then
         Self.IntenseDrop(@Self.DoWork);
     end;
   end;
 
 begin
   Self.StartTime := GetTickCount();
-  Self.SetupAntiban();
   MainScreen.SetAngle(True);
 
   if Inventory.Count = 0 then
@@ -553,7 +649,9 @@ begin
       TerminateScript('Failed to walk from bank on startup');
   end;
 
+  // --------- bot loop
   repeat
+    // handle inventory
     if (Random(5000) <> 0) and Inventory.IsFull() then
     begin
       if HasBanking then Self.DoBanking()
@@ -561,6 +659,14 @@ begin
       Inc(BotStats.Trips);
     end;
 
+    // tweak coordinates for our rocks
+    if timer.IsFinished() then
+    begin
+      Self.SetBestOffset(Self.RockSpots, Self.RockColors);
+      timer.Init(ONE_MINUTE);
+    end;
+
+    // do some mining
     if Self.DoWork() then
     begin
       TryDropWhileMining();
@@ -573,6 +679,7 @@ begin
 end;
 
 procedure TMiner.Init();
+const H = 0.5; O = 1;
 begin
   {$ifdecl TWindowOverlay}
   Overlay := TWindowOverlay.Create();
@@ -581,12 +688,12 @@ begin
   {$endif}
 
   self.DeclarePlayers();
-
-  Mouse.Speed := 10;
-  Players.GetCurrent()^.Login();
   Self.SetupAntiban();
 
+  Mouse.Speed := 10;
   Inventory.ShiftDrop := SHIFT_DROP;
+  TerminateScript;
+  Players.GetCurrent()^.Login();
 end;
 
 procedure TMiner.Setup();
@@ -607,7 +714,7 @@ begin
   Self.ConfigPath := CONFIG_PATH + Self.ConfigPath + '/';
 
   if not LoadConfig() then
-    RaiseException('Unknown config');
+    TerminateScript('Unknown config');
 
   RSClient.SetFocus();
 end;
@@ -629,6 +736,8 @@ begin
   AddOnTerminate(@Bot.Free);
 
   RSW.Init(Bot.ConfigPath+CONFIG_MAP);
+  RSW.MemScanEnabled := False;
+
   AddOnTerminate(@RSW.Free);
 
   Bot.Run();
