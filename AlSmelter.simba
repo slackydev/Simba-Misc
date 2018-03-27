@@ -148,7 +148,6 @@ begin
   if GetTickCount() - StatsDebugTick > 6000 then
   begin
     ClearDebug();
-    BotStats.Gains := BotStats.XPPerBar * BotStats.Count;
     WriteLn('+---| STATS |----------------------------------------');
     WriteLn('|- Bars Made           : ', BotStats.Count);
     WriteLn('|- Experience Gained   : ', Round(BotStats.Gains,2));
@@ -355,8 +354,8 @@ begin
   Antiban.AddTask([@Antiban.RandomCompass,  ONE_MINUTE*35]);
   Antiban.AddTask([@Antiban.DoMiscStuff,    ONE_MINUTE*45]);
 
-  Antiban.AddBreak([45 * ONE_MINUTE, 05 * ONE_MINUTE, 0.05]);
-  Antiban.AddBreak([02 * ONE_HOUR,   10 * ONE_MINUTE, 0.15]);
+  Antiban.AddBreak([65 * ONE_MINUTE, 05 * ONE_MINUTE, 0.15]);
+  Antiban.AddBreak([02 * ONE_HOUR,   10 * ONE_MINUTE, 0.75]);
   Antiban.AddBreak([04 * ONE_HOUR,   45 * ONE_MINUTE, 0.85]);
   Antiban.AddBreak([17 * ONE_HOUR,   07 * ONE_HOUR,   0.99]);
 end;

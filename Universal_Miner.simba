@@ -1,4 +1,4 @@
-program Universal_Miner_V028;
+program Universal_Miner_V032;
 {$DEFINE SMART}
 {$I SRL/OSR.simba}
 {$I SRL/utils/slackdebug.simba}
@@ -62,6 +62,7 @@ type
 
     ClickOrder: TClickHistory;
     ProggyArea: TBox;
+    FailCount: Int32;
 
     Antiban: TAntiban;
   end;
@@ -71,6 +72,7 @@ var
   Bot: TMiner;
   RSW: TRSWalker;
 
+  NativeClient: Int32;
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -135,6 +137,8 @@ begin
     if p.Pid = PID then
       Break;
   EnumChildWindows(p.Handle, @GetLastChild, @Result);
+  if Result = 0 then
+    Result := NativeClient;
 end;
 
 
@@ -276,9 +280,9 @@ begin
   Antiban.AddTask([@Antiban.DoMiscStuff,   ONE_MINUTE*45, 0.15]);
   Antiban.AddTask([@Antiban.VeryShortBreak,ONE_MINUTE*50, 0.15]);
 
-  Antiban.AddBreak([1.0 * ONE_HOUR, 07 * ONE_MINUTE, 0.09]);
-  Antiban.AddBreak([3.5 * ONE_HOUR, 40 * ONE_MINUTE, 0.85]);
-  Antiban.AddBreak([17  * ONE_HOUR, 07 * ONE_HOUR,   0.99]);
+  Antiban.AddBreak([1.0 * ONE_HOUR, 05 * ONE_MINUTE, 0.33, 0.25]);
+  Antiban.AddBreak([3.5 * ONE_HOUR, 40 * ONE_MINUTE, 0.85, 0.15]);
+  Antiban.AddBreak([17  * ONE_HOUR, 07 * ONE_HOUR,   0.95, 0.10]);
 end;
 
 function TMiner.HasBanking(): Boolean;
@@ -362,8 +366,25 @@ begin
       Result += rect;
   end;
 
-  if Length(Result) = 0 then
-    TerminateScript('Not close enough to objects: ('+ ToStr(me.x) +','+ToStr(me.y)+') -> '+ ToStr(locations));
+  if (Length(Result) = 0) then
+  begin
+    if (Self.FailCount in [2,6]) then
+      Minimap.RandomCompass(0,359)
+    else if (Self.FailCount = 7) then
+    begin
+      WriteLn('Trying to recover from failure');
+      Logout.ClickLogout();
+      Wait(1000,30000,wdLeft);
+      Players.GetCurrent^.Login();
+      MainScreen.SetAngle(True);
+      WaitEx(500,150);
+    end else if (Self.FailCount > 10) then
+      TerminateScript('Not close enough to objects: ('+ ToStr(me.x) +','+ToStr(me.y)+') -> '+ ToStr(locations));
+
+    Inc(Self.FailCount);
+    WaitEx(600,150);
+  end else
+    Self.FailCount := 0;
 end;
 
 
@@ -1064,6 +1085,8 @@ end;
 
 
 begin
+  NativeClient := GetNativeWindow();
+
   smart.EnableDrawing := True;
   srl.Setup([]);
   srl.Options := [soDebugAntiban];
@@ -1074,6 +1097,7 @@ begin
 
   RSW.Init(Bot.ConfigPath+CONFIG_MAP);
   AddOnTerminate(@RSW.Free);
+  //RSW.MemScanEnabled := False;
 
   Bot.Run();
 end.

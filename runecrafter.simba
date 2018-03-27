@@ -1,10 +1,10 @@
-program Runecrafter_V001;
+program Runecrafter_V003;
 {$I SRL/OSR.simba}
 {$I SRL/utils/rsclient.simba}
 {$I SRL/utils/rsclient_overrides.simba}
 {$I SRL/utils/slackdebug.simba}
 {$I RSWalker/Walker.simba}
-{$I WindowOverlay/WindowOverlay.simba}
+{.$I WindowOverlay/WindowOverlay.simba}
 {$H-}
 {==============================================================================]
 | Slacky's Runecrafter
@@ -89,7 +89,6 @@ end;
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 // FISHER
-
 procedure TRunecrafter.DeclarePlayers();
 begin
   with Players.New()^ do
@@ -135,7 +134,7 @@ begin
   begin
     ClearDebug();
     WriteLn('+---| STATS |----------------------------------------');
-    WriteLn('|- Bars Made           : ', BotStats.Count);
+    WriteLn('|- Runes Made          : ', BotStats.Count);
     WriteLn('|- Experience Gained   : ', Round(BotStats.Gains,2));
     WriteLn('|- Experience Per Hour : ', Round(BotStats.Gains / (GetTimeRunning()/1000/60/60)) );
     WriteLn('|- Runecrafting Level  : ', Round(BotStats.CurrLvl,2));
@@ -238,7 +237,7 @@ begin
     rect := Self.FindPortalNear(rect.Expand(18).Bounds);
     Mouse.Move(rect);
     Wait(30,500, wdLeft);
-    if MainScreen.IsUpText('Portal') then
+    if MainScreen.IsUpText(['Use ', 'Port']) then
     begin
       Mouse.Click(mouse_left);
       Result := True;
@@ -270,7 +269,6 @@ end;
 
 procedure TRunecrafter.DoBanking();
 begin
-  WriteLn(Altar.BankLocation);
   RSW.WebWalk(Altar.BankLocation,4,0.3);
 
   for 0 to 3 do
@@ -323,7 +321,7 @@ begin
 
     if not Self.EnterAltar() then
     begin
-      Wait(200,2000, wdLeft);
+      Wait(600,2000, wdLeft);
       if not Self.EnterAltar() then
         TerminateScript('Failed to enter altar');
     end;
@@ -331,7 +329,7 @@ begin
 
     if not Self.Return() then
     begin
-      Wait(200,2000, wdLeft);
+      Wait(600,2000, wdLeft);
       if not Self.Return() then
         TerminateScript('Failed to return from altar');
     end;
@@ -340,18 +338,23 @@ begin
   end;
 end;
 
+procedure TRunecrafter.WhileMoving(Sender:TObject; Location: TPoint); static;
+begin
+  Bot.DoAntiban();
+end;
+
 procedure TRunecrafter.SetupAntiban();
 begin
   Antiban.Init(SKILL_RUNECRAFTING, 4);
 
-  Antiban.AddTask([@Antiban.LoseFocus,     ONE_MINUTE*5]);
-  Antiban.AddTask([@Antiban.HoverPlayers,  ONE_MINUTE*8]);
+  Antiban.AddTask([@Antiban.LoseFocus,     ONE_MINUTE*6]);
   Antiban.AddTask([@Antiban.CheckSkill,    ONE_MINUTE*9]);
   Antiban.AddTask([@Antiban.CheckStats,    ONE_MINUTE*10]);
-  Antiban.AddTask([@Antiban.OpenRandomTab, ONE_MINUTE*10]);
-  Antiban.AddTask([@Antiban.VeryShortBreak,ONE_MINUTE*25]);
-  Antiban.AddTask([@Antiban.DoMiscStuff,   ONE_MINUTE*25]);
-  Antiban.AddTask([@Antiban.RandomCompass, ONE_MINUTE*45]);
+  Antiban.AddTask([@Antiban.OpenRandomTab, ONE_MINUTE*14]);
+  Antiban.AddTask([@Antiban.HoverPlayers,  ONE_MINUTE*14]);
+  Antiban.AddTask([@Antiban.VeryShortBreak,ONE_MINUTE*22]);
+  Antiban.AddTask([@Antiban.RandomCompass, ONE_MINUTE*25]);
+  Antiban.AddTask([@Antiban.DoMiscStuff,   ONE_MINUTE*27]);
 
   Antiban.AddBreak([01 * ONE_HOUR,   07 * ONE_MINUTE, 0.05, 0.25]);
   Antiban.AddBreak([04 * ONE_HOUR,   45 * ONE_MINUTE, 0.85, 0.15]);
@@ -367,6 +370,7 @@ begin
   {$endif}
 
   RSW.Init('world.png');
+  RSW.onMoveEvent := @Self.WhileMoving;
   RSWAltars.Init('Altars.png');
   RSWAltars.MemScanEnabled := False;
 
@@ -378,7 +382,7 @@ begin
     AirAltar:
       begin
         Altar.BankerType   := blFaladorEast;
-        Altar.BankLocation := P_FALADOR_EBANK;
+        Altar.BankLocation := locFaladorEBank;
         Altar.RuinsWalkTo  := [3758, 3278];
         Altar.RuinsMiddle  := [3750, 3282];
         Altar.AltarPortal  := [1524, 257];
@@ -387,7 +391,7 @@ begin
     MindAltar:
       begin
         Altar.BankerType   := blFaladorWest;
-        Altar.BankLocation := P_FALADOR_WBANK;
+        Altar.BankLocation := locFaladorWBank;
         Altar.RuinsWalkTo  := [3730, 2400];
         Altar.RuinsMiddle  := [3738, 2392];
         Altar.AltarPortal  := [1330, 261];
@@ -396,7 +400,7 @@ begin
     WaterAltar:
       begin
         Altar.BankerType   := blDrynor;
-        Altar.BankLocation := P_DRYNOR;
+        Altar.BankLocation := locDrynorBank;
         Altar.RuinsWalkTo  := [4542, 3793];
         Altar.RuinsMiddle  := [4548, 3790];
         Altar.AltarPortal  := [1066, 241];
@@ -405,7 +409,7 @@ begin
     EarthAltar:
       begin
         Altar.BankerType   := blVarrockEast;
-        Altar.BankLocation := P_VARROCK_EBANK;
+        Altar.BankLocation := locVarrockEBank;
         Altar.RuinsWalkTo  := [5030, 2561];
         Altar.RuinsMiddle  := [5034, 2553];
         Altar.AltarPortal  := [778, 253];
@@ -414,7 +418,7 @@ begin
     FireAltar:
       begin
         Altar.BankerType   := blAlKharid;
-        Altar.BankLocation := P_ALKHARID_BANK;
+        Altar.BankLocation := locAlkharidBank;
         Altar.RuinsWalkTo  := [5058, 3437];
         Altar.RuinsMiddle  := [5062, 3430];
         Altar.AltarPortal  := [455, 169];
