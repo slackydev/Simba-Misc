@@ -1,4 +1,4 @@
-program Universal_Miner_V032;
+program Universal_Miner_V033;
 {$DEFINE SMART}
 {$I SRL/OSR.simba}
 {$I SRL/utils/slackdebug.simba}
@@ -977,7 +977,7 @@ type
   begin
     TPA := Self.BankPath + Self.RockSpots + Self.BankSpots;
 
-    sz := Point(High(RSW.worldMap[0]),High(RSW.worldMap));
+    sz := Point(High(RSW.WorldMap[0]),High(RSW.WorldMap));
     B := TPA.Bounds.ExpandFunc(Pad);
     B.LimitTo(Box(0,0,sz.x,sz.y));
 
@@ -986,7 +986,12 @@ type
     for pt in TPA do
     begin
       slice.Init(client.GetMBitmaps);
-      slice.DrawMatrix(w_GetArea(RSW.worldMap, Max(0,pt.x-Pad), Max(0,pt.y-Pad), Min(sz.x,pt.x+Pad), Min(sz.y,pt.y+Pad)));
+      slice.DrawMatrix(RSW.WorldMap.Crop(Box(
+          Max(0,pt.x-Pad),
+          Max(0,pt.y-Pad),
+          Min(sz.x,pt.x+Pad),
+          Min(sz.y,pt.y+Pad)
+      )));
       slice.DrawTransparent(pt.x-B.x1-Pad,pt.y-B.y1-Pad, map);
       slice.Free();
     end;
